@@ -1,0 +1,33 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gymflow_mini}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gymflow_mini}
+      POSTGRES_DB: ${POSTGRES_DB:-gymflow_mini}
+    ports:
+      - "5434:5432"
+    volumes:
+      - gymflow_mini_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gymflow_mini}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-gymflow_mini}:${POSTGRES_PASSWORD:-gymflow_mini}@postgres:5432/${POSTGRES_DB:-gymflow_mini}?schema=public
+      JWT_SECRET: ${JWT_SECRET:-local-mini-secret-change-before-deploy}
+      PORT: 3100
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+    ports:
+      - "${BACKEND_PORT:-3100}:3100"
+
+volumes:
+  gymflow_mini_db:
+

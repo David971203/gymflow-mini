@@ -1,0 +1,183 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+}
+
+enum MemberStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum MembershipStatus {
+  SCHEDULED
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  PARTIAL
+  OVERDUE
+  PAID
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  TRANSFER
+  OTHER
+}
+
+model Gym {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  province  String?
+  phone     String?
+  currency  String   @default("CUP")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users    User[]
+  members  Member[]
+  plans    Plan[]
+  payments Payment[]
+  syncReceipts SyncReceipt[]
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         UserRole
+  gymId        String?
+  gym          Gym?     @relation(fields: [gymId], references: [id])
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  movements PaymentMovement[]
+  syncReceipts SyncReceipt[]
+  @@index([gymId])
+}
+
+model Member {
+  id        String       @id @default(uuid())
+  gymId     String
+  gym       Gym          @relation(fields: [gymId], references: [id])
+  /// Carnet de identidad cubano. Se conserva como texto por los ceros iniciales.
+  ci        String
+  firstName String
+  lastName  String
+  phone     String?
+  address   String?
+  status    MemberStatus @default(ACTIVE)
+  joinedAt  DateTime     @default(now())
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  memberships Membership[]
+  payments    Payment[]
+  @@unique([gymId, ci])
+  @@index([gymId])
+  @@index([status])
+}
+
+model Plan {
+  id           String   @id @default(uuid())
+  gymId        String
+  gym          Gym      @relation(fields: [gymId], references: [id])
+  name         String
+  description  String?
+  price        Decimal  @db.Decimal(12, 2)
+  durationDays Int
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships Membership[]
+  @@unique([gymId, name])
+  @@index([gymId])
+}
+
+model Membership {
+  id        String           @id @default(uuid())
+  memberId  String
+  member    Member           @relation(fields: [memberId], references: [id])
+  planId    String
+  plan      Plan             @relation(fields: [planId], references: [id])
+  startDate DateTime
+  endDate   DateTime
+  status    MembershipStatus @default(ACTIVE)
+  createdAt DateTime         @default(now())
+  /// UUID de la operación offline que creó esta membresía.
+  clientMutationId String?   @unique
+
+  payment Payment?
+  @@index([memberId, status])
+  @@index([endDate])
+}
+
+model Payment {
+  id           String        @id @default(uuid())
+  gymId        String
+  gym          Gym           @relation(fields: [gymId], references: [id])
+  memberId     String
+  member       Member        @relation(fields: [memberId], references: [id])
+  membershipId String        @unique
+  membership   Membership    @relation(fields: [membershipId], references: [id])
+  amount       Decimal       @db.Decimal(12, 2)
+  paidAmount   Decimal       @default(0) @db.Decimal(12, 2)
+  dueDate      DateTime?
+  status       PaymentStatus @default(PENDING)
+  createdAt    DateTime      @default(now())
+  paidAt       DateTime?
+
+  movements PaymentMovement[]
+  @@index([gymId, status])
+  @@index([memberId])
+}
+
+model PaymentMovement {
+  id          String        @id @default(uuid())
+  paymentId   String
+  payment     Payment       @relation(fields: [paymentId], references: [id])
+  actorUserId String
+  actor       User          @relation(fields: [actorUserId], references: [id])
+  amount      Decimal       @db.Decimal(12, 2)
+  method      PaymentMethod
+  reference   String?
+  occurredAt  DateTime      @default(now())
+  /// Hace idempotente un abono enviado varias veces durante la sincronización.
+  clientMutationId String?  @unique
+
+  @@index([paymentId])
+  @@index([occurredAt])
+}
+
+model SyncReceipt {
+  id          String   @id
+  gymId       String
+  gym         Gym      @relation(fields: [gymId], references: [id])
+  actorUserId String
+  actor       User     @relation(fields: [actorUserId], references: [id])
+  type        String
+  entityId    String
+  status      String
+  result      Json?
+  message     String?
+  createdAt   DateTime @default(now())
+
+  @@index([gymId, createdAt])
+}

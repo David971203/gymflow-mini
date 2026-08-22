@@ -1,0 +1,13 @@
+**/node_modules/
+**/.env
+**/dist/
+**/.expo/
+**/.next/
+**/.vite/
+**/.vinext/
+**/.wrangler/
+**/coverage/
+**/*.db
+**/*.db-shm
+**/*.db-wal
+.sites/

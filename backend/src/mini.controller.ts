@@ -1,0 +1,41 @@
+import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
+import { UserRole } from '@prisma/client';
+import { CurrentUser, Roles, type AuthUser } from './common';
+import { MiniService } from './mini.service';
+import { ApplyPaymentDto, CreateGymDto, CreateMemberDto, CreateMembershipDto, CreatePlanDto, RenewMembershipDto, UpdateGymStatusDto, UpdateMemberDto, UpdatePlanDto } from './mini.dto';
+
+@ApiTags('super-admin')
+@Controller('platform')
+@Roles(UserRole.SUPER_ADMIN)
+export class PlatformController {
+  constructor(private readonly mini: MiniService) {}
+  @Get('overview') overview() { return this.mini.platformOverview(); }
+  @Get('gyms') gyms() { return this.mini.listGyms(); }
+  @Post('gyms') createGym(@Body() dto: CreateGymDto) { return this.mini.createGym(dto); }
+  @Patch('gyms/:id/status') status(@Param('id') id: string, @Body() dto: UpdateGymStatusDto) { return this.mini.updateGymStatus(id, dto.isActive); }
+}
+
+@ApiTags('admin')
+@Controller()
+@Roles(UserRole.ADMIN)
+export class AdminController {
+  constructor(private readonly mini: MiniService) {}
+  @Get('dashboard') dashboard(@CurrentUser() user: AuthUser) { return this.mini.adminDashboard(user); }
+
+  @Get('members') members(@CurrentUser() user: AuthUser, @Query('search') search?: string) { return this.mini.listMembers(user, search); }
+  @Post('members') createMember(@Body() dto: CreateMemberDto, @CurrentUser() user: AuthUser) { return this.mini.createMember(dto, user); }
+  @Patch('members/:id') updateMember(@Param('id') id: string, @Body() dto: UpdateMemberDto, @CurrentUser() user: AuthUser) { return this.mini.updateMember(id, dto, user); }
+
+  @Get('plans') plans(@CurrentUser() user: AuthUser) { return this.mini.listPlans(user); }
+  @Post('plans') createPlan(@Body() dto: CreatePlanDto, @CurrentUser() user: AuthUser) { return this.mini.createPlan(dto, user); }
+  @Patch('plans/:id') updatePlan(@Param('id') id: string, @Body() dto: UpdatePlanDto, @CurrentUser() user: AuthUser) { return this.mini.updatePlan(id, dto, user); }
+
+  @Get('memberships') memberships(@CurrentUser() user: AuthUser, @Query('memberId') memberId?: string) { return this.mini.listMemberships(user, memberId); }
+  @Post('memberships') createMembership(@Body() dto: CreateMembershipDto, @CurrentUser() user: AuthUser) { return this.mini.createMembership(dto, user); }
+  @Post('memberships/:id/renew') renew(@Param('id') id: string, @Body() dto: RenewMembershipDto, @CurrentUser() user: AuthUser) { return this.mini.renewMembership(id, dto, user); }
+
+  @Get('payments') payments(@CurrentUser() user: AuthUser) { return this.mini.listPayments(user); }
+  @Post('payments/:id/applications') apply(@Param('id') id: string, @Body() dto: ApplyPaymentDto, @CurrentUser() user: AuthUser) { return this.mini.applyPayment(id, dto, user); }
+}
+

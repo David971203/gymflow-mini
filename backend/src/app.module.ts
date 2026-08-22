@@ -1,0 +1,25 @@
+import { Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
+import { JwtModule } from '@nestjs/jwt';
+import { PassportModule } from '@nestjs/passport';
+import { AuthController } from './auth.controller';
+import { AuthService } from './auth.service';
+import { JwtGuard, RolesGuard } from './guards';
+import { JwtStrategy } from './jwt.strategy';
+import { AdminController, PlatformController } from './mini.controller';
+import { MiniService } from './mini.service';
+import { PrismaService } from './prisma.service';
+import { SyncController } from './sync.controller';
+import { SyncService } from './sync.service';
+
+@Module({
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true }),
+    PassportModule,
+    JwtModule.registerAsync({ inject: [ConfigService], useFactory: (config: ConfigService) => ({ secret: config.getOrThrow('JWT_SECRET'), signOptions: { expiresIn: '12h' } }) }),
+  ],
+  controllers: [AuthController, PlatformController, AdminController, SyncController],
+  providers: [PrismaService, AuthService, MiniService, SyncService, JwtStrategy, { provide: APP_GUARD, useClass: JwtGuard }, { provide: APP_GUARD, useClass: RolesGuard }],
+})
+export class AppModule {}

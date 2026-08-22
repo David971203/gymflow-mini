@@ -143,6 +143,12 @@ DATABASE_URL="postgresql://..." npm run prisma:deploy
 
 No ejecutes `prisma migrate dev` ni el seed automáticamente en cada build de producción.
 
+### Despliegue del backend en Railway
+
+Configura `backend` como **Root Directory** y deja que Railway use su `Dockerfile`. La imagen copia `prisma/` antes de `npm ci`, porque el `postinstall` necesita el esquema para generar Prisma Client. Al arrancar, el contenedor ejecuta `prisma migrate deploy` antes de iniciar NestJS.
+
+Variables requeridas: `DATABASE_URL`, `JWT_SECRET` y `CORS_ORIGIN`. Railway proporciona `PORT` automáticamente; NestJS ya escucha ese valor en `0.0.0.0`.
+
 ### 2. Aplicación Android
 
 ```bash

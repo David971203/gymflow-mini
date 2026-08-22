@@ -124,6 +124,25 @@ docker compose exec backend npm run prisma:seed
 API: `http://localhost:3100/api`  
 Swagger: `http://localhost:3100/api/docs`
 
+### Despliegue del backend en Vercel
+
+Al importar el repositorio en Vercel configura `backend` como **Root Directory**. Vercel detecta automáticamente `src/main.ts` como entrada NestJS. El `postinstall` del backend ejecuta `prisma generate` en cada instalación para que la caché de dependencias de Vercel no deje un Prisma Client desactualizado.
+
+Variables necesarias en Production y Preview:
+
+- `DATABASE_URL`: PostgreSQL accesible desde Internet y preferiblemente con pool de conexiones.
+- `JWT_SECRET`: secreto largo y diferente al valor de ejemplo.
+- `CORS_ORIGIN`: origen público del panel web; durante una prueba controlada puede ser `*`.
+
+Antes del primer despliegue aplica las migraciones contra la base de producción desde un entorno seguro:
+
+```bash
+cd backend
+DATABASE_URL="postgresql://..." npm run prisma:deploy
+```
+
+No ejecutes `prisma migrate dev` ni el seed automáticamente en cada build de producción.
+
 ### 2. Aplicación Android
 
 ```bash

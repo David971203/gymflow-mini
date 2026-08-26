@@ -8,13 +8,24 @@
     ],
     "orientation": "portrait",
     "userInterfaceStyle": "light",
+    "icon": "./assets/icon.png",
     "android": {
       "package": "com.gymflow.mini.admin",
-      "versionCode": 1
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#173f31"
+      }
     },
     "plugins": [
       "expo-secure-store",
       "expo-sqlite"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "5f1c8f5b-b6f9-4851-9cd4-5c9571c9d14a"
+      }
+    },
+    "owner": "davidcuba29"
   }
 }

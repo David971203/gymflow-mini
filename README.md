@@ -149,6 +149,19 @@ Configura `backend` como **Root Directory** y deja que Railway use su `Dockerfil
 
 Variables requeridas: `DATABASE_URL`, `JWT_SECRET` y `CORS_ORIGIN`. Railway proporciona `PORT` automáticamente; NestJS ya escucha ese valor en `0.0.0.0`.
 
+Si PostgreSQL está en Supabase, no uses en Railway la conexión directa
+`db.<project-ref>.supabase.co:5432`: normalmente solo publica IPv6. En el panel de
+Supabase abre **Connect**, selecciona **Session pooler** y copia esa cadena completa
+como `DATABASE_URL`. El formato esperado es:
+
+```text
+postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres?sslmode=require
+```
+
+El host, la región y el usuario del pooler deben copiarse del panel; no basta con
+cambiar el host de la URL directa. El modo sesión (puerto `5432`) admite IPv4 y
+funciona tanto para `prisma migrate deploy` como para el backend persistente.
+
 ### 2. Aplicación Android
 
 ```bash

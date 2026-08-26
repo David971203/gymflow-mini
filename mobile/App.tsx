@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, AppState, Modal, Pressable, RefreshControl, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, Image, Modal, Pressable, RefreshControl, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Network from 'expo-network';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
 import { api } from './src/api';
@@ -33,7 +33,7 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
   };
   return <SafeAreaView style={styles.loginPage}>
     <ExpoStatusBar style="light" />
-    <View style={styles.logo}><Text style={styles.logoLetter}>G</Text></View>
+    <Image accessibilityLabel="Logo de GymFlow Mini" source={require('./assets/icon.png')} style={styles.logo} />
     <Text style={styles.loginBrand}>GymFlow <Text style={styles.mini}>MINI</Text></Text>
     <Text style={styles.loginTitle}>Tu gimnasio, bajo control.</Text>
     <Text style={styles.loginCopy}>Miembros, planes y caja en una aplicación simple.</Text>
@@ -202,7 +202,7 @@ function showError(error: unknown) { Alert.alert('Atención', error instanceof E
 
 const styles = StyleSheet.create({
   center:{flex:1,alignItems:'center',justifyContent:'center',backgroundColor:'#173f31'}, app:{flex:1,backgroundColor:'#f5f5ef'}, content:{flex:1},
-  loginPage:{flex:1,backgroundColor:'#173f31',paddingHorizontal:24,paddingTop:70},logo:{width:54,height:54,borderRadius:16,backgroundColor:'#c9f47b',alignItems:'center',justifyContent:'center'},logoLetter:{fontSize:30,fontWeight:'900',color:'#173f31'},loginBrand:{marginTop:16,color:'#fff',fontSize:22,fontWeight:'800'},mini:{color:'#c9f47b',fontSize:11,letterSpacing:2},loginTitle:{marginTop:44,color:'#fff',fontSize:34,fontWeight:'800',letterSpacing:-1.2},loginCopy:{marginTop:10,color:'#b8cec4',fontSize:15,lineHeight:22},loginCard:{marginTop:34,padding:20,borderRadius:20,backgroundColor:'#fff'},version:{marginTop:'auto',marginBottom:24,textAlign:'center',color:'#769387',fontSize:10,letterSpacing:2},
+  loginPage:{flex:1,backgroundColor:'#173f31',paddingHorizontal:24,paddingTop:70},logo:{width:64,height:64,borderRadius:18},loginBrand:{marginTop:16,color:'#fff',fontSize:22,fontWeight:'800'},mini:{color:'#c9f47b',fontSize:11,letterSpacing:2},loginTitle:{marginTop:44,color:'#fff',fontSize:34,fontWeight:'800',letterSpacing:-1.2},loginCopy:{marginTop:10,color:'#b8cec4',fontSize:15,lineHeight:22},loginCard:{marginTop:34,padding:20,borderRadius:20,backgroundColor:'#fff'},version:{marginTop:'auto',marginBottom:24,textAlign:'center',color:'#769387',fontSize:10,letterSpacing:2},
   topbar:{paddingTop:18,paddingHorizontal:20,paddingBottom:14,flexDirection:'row',alignItems:'center',justifyContent:'space-between',backgroundColor:'#f5f5ef'},kicker:{color:'#397458',fontSize:9,fontWeight:'800',letterSpacing:1.5},screenTitle:{marginTop:3,fontSize:27,fontWeight:'800',color:'#17221d',letterSpacing:-.8},avatar:{width:39,height:39,borderRadius:20,alignItems:'center',justifyContent:'center',backgroundColor:'#c9f47b'},
   syncBar:{minHeight:44,marginHorizontal:16,marginBottom:4,paddingHorizontal:12,flexDirection:'row',alignItems:'center',gap:9,borderRadius:12,backgroundColor:'#e5f2d1'},syncOffline:{backgroundColor:'#fff0d9'},syncError:{backgroundColor:'#ffe4df'},syncDot:{width:9,height:9,borderRadius:5,backgroundColor:'#e28d36'},syncDotOk:{backgroundColor:'#1d7b53'},syncMain:{flex:1},syncTitle:{color:'#24342c',fontSize:11,fontWeight:'800'},syncDetail:{marginTop:1,color:'#657169',fontSize:9},syncAction:{color:'#1d6b4d',fontSize:10,fontWeight:'800'},
   scroll:{padding:16,paddingBottom:35},hero:{padding:24,borderRadius:20,backgroundColor:'#173f31'},heroLabel:{color:'#a9c3b7',fontSize:10,fontWeight:'700',letterSpacing:1.3},heroValue:{marginTop:9,color:'#fff',fontSize:30,fontWeight:'800',letterSpacing:-1},heroHint:{marginTop:7,color:'#c9f47b',fontSize:11},metricGrid:{marginTop:12,flexDirection:'row',flexWrap:'wrap',gap:10},metric:{width:'48.3%',padding:17,borderWidth:1,borderColor:'#e2e7e3',borderRadius:15,backgroundColor:'#fff'},metricWide:{width:'100%'},metricLabel:{color:'#78827d',fontSize:11},metricValue:{marginTop:9,color:'#1c2b24',fontSize:21,fontWeight:'800'},

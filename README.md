@@ -14,6 +14,8 @@ No comparte API, base de datos, tokens ni despliegue con GymFlow completo.
 
 Panel demostrativo publicado, con acceso privado del propietario: <https://gymflow-mini-cuba.david9712.chatgpt.site>
 
+Panel web publicado en Vercel: <https://superadmin-web-eight.vercel.app>
+
 ## Alcance deliberado del piloto
 
 Incluye:

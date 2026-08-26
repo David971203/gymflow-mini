@@ -1,0 +1,6 @@
+.env
+.env.local
+.next
+.vinext
+dist
+node_modules

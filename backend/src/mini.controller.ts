@@ -3,7 +3,7 @@ import { ApiTags } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import { CurrentUser, Roles, type AuthUser } from './common';
 import { MiniService } from './mini.service';
-import { ApplyPaymentDto, CreateGymDto, CreateMemberDto, CreateMembershipDto, CreatePlanDto, RenewMembershipDto, UpdateGymStatusDto, UpdateMemberDto, UpdatePlanDto } from './mini.dto';
+import { ApplyPaymentDto, CreateGymAdminDto, CreateGymDto, CreateMemberDto, CreateMembershipDto, CreatePlanDto, RenewMembershipDto, UpdateGymAdminDto, UpdateGymDto, UpdateGymStatusDto, UpdateMemberDto, UpdatePlanDto } from './mini.dto';
 
 @ApiTags('super-admin')
 @Controller('platform')
@@ -13,7 +13,15 @@ export class PlatformController {
   @Get('overview') overview() { return this.mini.platformOverview(); }
   @Get('gyms') gyms() { return this.mini.listGyms(); }
   @Post('gyms') createGym(@Body() dto: CreateGymDto) { return this.mini.createGym(dto); }
+  @Get('gyms/:id') gym(@Param('id') id: string) { return this.mini.getGym(id); }
+  @Patch('gyms/:id') updateGym(@Param('id') id: string, @Body() dto: UpdateGymDto) { return this.mini.updateGym(id, dto); }
   @Patch('gyms/:id/status') status(@Param('id') id: string, @Body() dto: UpdateGymStatusDto) { return this.mini.updateGymStatus(id, dto.isActive); }
+  @Get('gyms/:gymId/admins') admins(@Param('gymId') gymId: string) { return this.mini.listGymAdmins(gymId); }
+  @Post('gyms/:gymId/admins') createAdmin(@Param('gymId') gymId: string, @Body() dto: CreateGymAdminDto) { return this.mini.createGymAdmin(gymId, dto); }
+  @Patch('gyms/:gymId/admins/:id') updateAdmin(@Param('gymId') gymId: string, @Param('id') id: string, @Body() dto: UpdateGymAdminDto) { return this.mini.updateGymAdmin(gymId, id, dto); }
+  @Get('gyms/:gymId/members') gymMembers(@Param('gymId') gymId: string, @Query('search') search?: string) { return this.mini.listGymMembers(gymId, search); }
+  @Post('gyms/:gymId/members') createGymMember(@Param('gymId') gymId: string, @Body() dto: CreateMemberDto) { return this.mini.createGymMember(gymId, dto); }
+  @Patch('gyms/:gymId/members/:id') updateGymMember(@Param('gymId') gymId: string, @Param('id') id: string, @Body() dto: UpdateMemberDto) { return this.mini.updateGymMember(gymId, id, dto); }
 }
 
 @ApiTags('admin')
@@ -38,4 +46,3 @@ export class AdminController {
   @Get('payments') payments(@CurrentUser() user: AuthUser) { return this.mini.listPayments(user); }
   @Post('payments/:id/applications') apply(@Param('id') id: string, @Body() dto: ApplyPaymentDto, @CurrentUser() user: AuthUser) { return this.mini.applyPayment(id, dto, user); }
 }
-

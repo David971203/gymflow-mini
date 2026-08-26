@@ -46,6 +46,10 @@ test("keeps the product metadata and API integration configured", async () => {
   assert.match(page, /NEXT_PUBLIC_API_URL/);
   assert.match(page, /\/platform\/overview/);
   assert.match(page, /\/platform\/gyms/);
+  assert.match(page, /\/admins/);
+  assert.match(page, /\/members/);
+  assert.match(page, /Gestión de gimnasio/i);
+  assert.match(page, /Guardar información/);
   assert.match(page, /gymflow_mini_super_token/);
   assert.match(layout, /title:\s*"GymFlow Mini \| Plataforma"/);
   assert.match(layout, /images:\s*\["\/og\.png"\]/);

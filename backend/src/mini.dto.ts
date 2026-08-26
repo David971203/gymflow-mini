@@ -14,6 +14,29 @@ export class CreateGymDto {
 
 export class UpdateGymStatusDto { @IsBoolean() isActive: boolean; }
 
+export class UpdateGymDto {
+  @IsOptional() @IsString() @MaxLength(100) name?: string;
+  @IsOptional() @IsString() @MaxLength(80) @Matches(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, { message: 'El identificador solo admite minúsculas, números y guiones' }) slug?: string;
+  @IsOptional() @IsString() @MaxLength(100) province?: string;
+  @IsOptional() @IsString() @MaxLength(30) phone?: string;
+  @IsOptional() @IsString() @Matches(/^[A-Z]{3}$/, { message: 'La moneda debe usar un código de tres letras' }) currency?: string;
+  @IsOptional() @IsBoolean() isActive?: boolean;
+}
+
+export class CreateGymAdminDto {
+  @IsString() @MaxLength(100) name: string;
+  @IsEmail() email: string;
+  @IsString() @MinLength(8) password: string;
+  @IsOptional() @IsBoolean() isActive?: boolean;
+}
+
+export class UpdateGymAdminDto {
+  @IsOptional() @IsString() @MaxLength(100) name?: string;
+  @IsOptional() @IsEmail() email?: string;
+  @IsOptional() @IsString() @MinLength(8) password?: string;
+  @IsOptional() @IsBoolean() isActive?: boolean;
+}
+
 export class CreateMemberDto {
   @IsOptional() @IsUUID() clientId?: string;
   @IsOptional() @IsDateString() occurredAt?: string;

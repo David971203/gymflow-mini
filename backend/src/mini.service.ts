@@ -3,7 +3,7 @@ import { MembershipStatus, PaymentStatus, Prisma, UserRole } from '@prisma/clien
 import * as argon2 from 'argon2';
 import { PrismaService } from './prisma.service';
 import type { AuthUser } from './common';
-import { ApplyPaymentDto, CreateGymDto, CreateMemberDto, CreateMembershipDto, CreatePlanDto, RenewMembershipDto, UpdateMemberDto, UpdatePlanDto } from './mini.dto';
+import { ApplyPaymentDto, CreateGymAdminDto, CreateGymDto, CreateMemberDto, CreateMembershipDto, CreatePlanDto, RenewMembershipDto, UpdateGymAdminDto, UpdateGymDto, UpdateMemberDto, UpdatePlanDto } from './mini.dto';
 
 const membershipInclude = {
   member: { select: { id: true, gymId: true, ci: true, firstName: true, lastName: true, phone: true } },
@@ -37,8 +37,97 @@ export class MiniService {
     });
   }
 
+  async getGym(id: string) {
+    const gym = await this.prisma.gym.findUnique({
+      where: { id },
+      include: {
+        _count: { select: { members: true, plans: true, payments: true } },
+        users: { where: { role: UserRole.ADMIN }, select: { id: true, email: true, name: true, isActive: true, createdAt: true }, orderBy: { createdAt: 'asc' } },
+      },
+    });
+    if (!gym) throw new NotFoundException('Gimnasio no encontrado');
+    return gym;
+  }
+
+  async updateGym(id: string, dto: UpdateGymDto) {
+    await this.requireGym(id);
+    try {
+      return await this.prisma.gym.update({ where: { id }, data: { ...dto, ...(dto.slug ? { slug: dto.slug.toLowerCase() } : {}) } });
+    } catch (error) {
+      if (this.isUniqueConflict(error, 'slug')) throw new ConflictException('Ese identificador de gimnasio ya está en uso');
+      throw error;
+    }
+  }
+
   updateGymStatus(id: string, isActive: boolean) {
     return this.prisma.gym.update({ where: { id }, data: { isActive } });
+  }
+
+  async listGymAdmins(gymId: string) {
+    await this.requireGym(gymId);
+    return this.prisma.user.findMany({
+      where: { gymId, role: UserRole.ADMIN },
+      select: { id: true, email: true, name: true, isActive: true, createdAt: true },
+      orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
+    });
+  }
+
+  async createGymAdmin(gymId: string, dto: CreateGymAdminDto) {
+    await this.requireGym(gymId);
+    try {
+      return await this.prisma.user.create({
+        data: { gymId, role: UserRole.ADMIN, name: dto.name, email: dto.email.toLowerCase(), passwordHash: await argon2.hash(dto.password), isActive: dto.isActive ?? true },
+        select: { id: true, email: true, name: true, isActive: true, createdAt: true },
+      });
+    } catch (error) {
+      if (this.isUniqueConflict(error, 'email')) throw new ConflictException('Ese correo ya tiene una cuenta');
+      throw error;
+    }
+  }
+
+  async updateGymAdmin(gymId: string, id: string, dto: UpdateGymAdminDto) {
+    const admin = await this.prisma.user.findFirst({ where: { id, gymId, role: UserRole.ADMIN } });
+    if (!admin) throw new NotFoundException('Administrador no encontrado');
+    const { password, email, ...fields } = dto;
+    try {
+      return await this.prisma.user.update({
+        where: { id },
+        data: { ...fields, ...(email ? { email: email.toLowerCase() } : {}), ...(password ? { passwordHash: await argon2.hash(password) } : {}) },
+        select: { id: true, email: true, name: true, isActive: true, createdAt: true },
+      });
+    } catch (error) {
+      if (this.isUniqueConflict(error, 'email')) throw new ConflictException('Ese correo ya tiene una cuenta');
+      throw error;
+    }
+  }
+
+  async listGymMembers(gymId: string, search?: string) {
+    await this.requireGym(gymId);
+    return this.prisma.member.findMany({
+      where: { gymId, ...(search ? { OR: [{ ci: { contains: search } }, { firstName: { contains: search, mode: 'insensitive' } }, { lastName: { contains: search, mode: 'insensitive' } }, { phone: { contains: search } }] } : {}) },
+      include: { memberships: { include: { plan: true, payment: true }, orderBy: { createdAt: 'desc' }, take: 1 } },
+      orderBy: [{ status: 'asc' }, { firstName: 'asc' }, { lastName: 'asc' }],
+    });
+  }
+
+  async createGymMember(gymId: string, dto: CreateMemberDto) {
+    await this.requireGym(gymId);
+    const { clientId, occurredAt, ...data } = dto;
+    try {
+      return await this.prisma.member.create({ data: { ...(clientId ? { id: clientId } : {}), ...data, gymId, ...(occurredAt ? { joinedAt: new Date(occurredAt) } : {}) } });
+    } catch (error) {
+      this.rethrowMemberCiConflict(error);
+    }
+  }
+
+  async updateGymMember(gymId: string, id: string, dto: UpdateMemberDto) {
+    const member = await this.prisma.member.findFirst({ where: { id, gymId } });
+    if (!member) throw new NotFoundException('Miembro no encontrado');
+    try {
+      return await this.prisma.member.update({ where: { id }, data: dto });
+    } catch (error) {
+      this.rethrowMemberCiConflict(error);
+    }
   }
 
   async platformOverview() {
@@ -219,6 +308,12 @@ export class MiniService {
     return member;
   }
 
+  private async requireGym(id: string) {
+    const gym = await this.prisma.gym.findUnique({ where: { id } });
+    if (!gym) throw new NotFoundException('Gimnasio no encontrado');
+    return gym;
+  }
+
   findMemberByCi(ci: string, user: AuthUser) {
     return this.prisma.member.findUnique({ where: { gymId_ci: { gymId: this.gymId(user), ci } } });
   }
@@ -232,5 +327,11 @@ export class MiniService {
       throw new ConflictException('Ya existe un miembro registrado con ese carnet de identidad');
     }
     throw error;
+  }
+
+  private isUniqueConflict(error: unknown, field: string): boolean {
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') return false;
+    const target = error.meta?.target;
+    return Array.isArray(target) ? target.includes(field) : String(target ?? '').includes(field);
   }
 }

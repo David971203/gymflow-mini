@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { MiniService } from './mini.service';
 
@@ -31,5 +31,27 @@ describe('MiniService', () => {
     };
     const service = new MiniService(prisma as never);
     await expect(service.createMembership({ memberId: 'member-1', planId: 'plan-1', initialPayment: 1001 }, user)).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('permite al superadministrador actualizar todos los datos del gimnasio', async () => {
+    const update = jest.fn().mockResolvedValue({ id: 'gym-1', name: 'Titan Centro', slug: 'titan-centro', currency: 'CUP' });
+    const prisma = { gym: { findUnique: jest.fn().mockResolvedValue({ id: 'gym-1' }), update } };
+    const service = new MiniService(prisma as never);
+    await service.updateGym('gym-1', { name: 'Titan Centro', slug: 'titan-centro', currency: 'CUP' });
+    expect(update).toHaveBeenCalledWith({ where: { id: 'gym-1' }, data: { name: 'Titan Centro', slug: 'titan-centro', currency: 'CUP' } });
+  });
+
+  it('asigna el gimnasio de la ruta al crear un miembro desde plataforma', async () => {
+    const create = jest.fn().mockResolvedValue({ id: 'member-2' });
+    const prisma = { gym: { findUnique: jest.fn().mockResolvedValue({ id: 'gym-2' }) }, member: { create } };
+    const service = new MiniService(prisma as never);
+    await service.createGymMember('gym-2', { ci: '91020212345', firstName: 'Luis', lastName: 'Gómez' });
+    expect(create).toHaveBeenCalledWith({ data: { gymId: 'gym-2', ci: '91020212345', firstName: 'Luis', lastName: 'Gómez' } });
+  });
+
+  it('impide editar un administrador que pertenece a otro gimnasio', async () => {
+    const prisma = { user: { findFirst: jest.fn().mockResolvedValue(null) } };
+    const service = new MiniService(prisma as never);
+    await expect(service.updateGymAdmin('gym-1', 'admin-other', { name: 'Otro' })).rejects.toBeInstanceOf(NotFoundException);
   });
 });

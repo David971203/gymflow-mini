@@ -1,4 +1,4 @@
-export type Tab = 'INICIO' | 'MIEMBROS' | 'PLANES' | 'CAJA';
+export type Tab = 'INICIO' | 'MIEMBROS' | 'PLANES' | 'CAJA' | 'CUENTA';
 export type User = { id: string; email: string; name: string; role: 'ADMIN'; gymId: string; gym: { name: string; currency: string } };
 export type Dashboard = { members: number; activeMemberships: number; monthlyRevenue: number; pendingDebt: number; recentPayments: Movement[] };
 export type Plan = { id: string; name: string; description?: string; price: string; durationDays: number; isActive: boolean };

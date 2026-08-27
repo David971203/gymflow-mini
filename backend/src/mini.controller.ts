@@ -32,6 +32,9 @@ export class PlatformController {
   @Post('gyms/:gymId/members/:memberId/memberships') assignGymMembership(@Param('gymId') gymId: string, @Param('memberId') memberId: string, @Body() dto: AssignGymMembershipDto, @CurrentUser() user: AuthUser) { return this.mini.createGymMembership(gymId, memberId, dto, user); }
   @Patch('gyms/:gymId/members/:memberId/memberships/:id') updateGymMembership(@Param('gymId') gymId: string, @Param('memberId') memberId: string, @Param('id') id: string, @Body() dto: UpdateGymMembershipDto) { return this.mini.updateGymMembership(gymId, memberId, id, dto); }
   @Delete('gyms/:gymId/members/:memberId/memberships/:id') deleteGymMembership(@Param('gymId') gymId: string, @Param('memberId') memberId: string, @Param('id') id: string) { return this.mini.deleteGymMembership(gymId, memberId, id); }
+  @Get('gyms/:gymId/payments') gymPayments(@Param('gymId') gymId: string) { return this.mini.listGymPayments(gymId); }
+  @Post('gyms/:gymId/payments/:id/applications') applyGymPayment(@Param('gymId') gymId: string, @Param('id') id: string, @Body() dto: ApplyPaymentDto, @CurrentUser() user: AuthUser) { return this.mini.applyGymPayment(gymId, id, dto, user); }
+  @Get('gyms/:gymId/finances') gymFinances(@Param('gymId') gymId: string) { return this.mini.getGymFinances(gymId); }
 }
 
 @ApiTags('admin')

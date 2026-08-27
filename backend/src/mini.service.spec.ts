@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { PaymentStatus, Prisma } from '@prisma/client';
 import { MiniService } from './mini.service';
 
 describe('MiniService', () => {
@@ -122,5 +122,39 @@ describe('MiniService', () => {
     const service = new MiniService(prisma as never);
     await expect(service.deleteGymMember('gym-1', 'member-1')).resolves.toEqual({ id: 'member-1', disposition: 'DELETED' });
     expect(remove).toHaveBeenCalledWith({ where: { id: 'member-1' } });
+  });
+
+  it('lista los cobros exclusivamente para el gimnasio seleccionado', async () => {
+    const updateMany = jest.fn().mockResolvedValue({ count: 0 });
+    const findMany = jest.fn().mockResolvedValue([]);
+    const prisma = { gym: { findUnique: jest.fn().mockResolvedValue({ id: 'gym-2' }) }, payment: { updateMany, findMany } };
+    const service = new MiniService(prisma as never);
+    await service.listGymPayments('gym-2');
+    expect(updateMany.mock.calls[0][0].where.gymId).toBe('gym-2');
+    expect(findMany.mock.calls[0][0].where).toEqual({ gymId: 'gym-2' });
+  });
+
+  it('calcula el resumen financiero sin contar cobros cancelados como deuda', async () => {
+    const prisma = {
+      gym: { findUnique: jest.fn().mockResolvedValue({ id: 'gym-1' }) },
+      payment: { updateMany: jest.fn().mockResolvedValue({ count: 0 }), findMany: jest.fn().mockResolvedValue([
+        { amount: 1000, paidAmount: 250, status: PaymentStatus.PARTIAL },
+        { amount: 500, paidAmount: 0, status: PaymentStatus.OVERDUE },
+        { amount: 300, paidAmount: 0, status: PaymentStatus.CANCELLED },
+      ]) },
+      paymentMovement: {
+        aggregate: jest.fn().mockResolvedValue({ _sum: { amount: 250 } }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+    const service = new MiniService(prisma as never);
+    await expect(service.getGymFinances('gym-1')).resolves.toMatchObject({
+      totalBilled: 1800,
+      totalCollected: 250,
+      pendingBalance: 1250,
+      overdueBalance: 500,
+      monthlyRevenue: 250,
+      pendingPayments: 2,
+    });
   });
 });

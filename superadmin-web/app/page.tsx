@@ -11,6 +11,9 @@ type DeleteOutcome = { id: string; disposition: "DELETED" | "ARCHIVED" };
 type Notice = { message: string; tone: "success" | "error" | "warning" };
 type Membership = { id: string; status: string; startDate: string; endDate: string; planId?: string; plan: Plan; payment?: { id: string; status: string; amount: number | string; paidAmount: number | string } | null };
 type Member = { id: string; ci: string; firstName: string; lastName: string; phone?: string; address?: string; status: "ACTIVE" | "INACTIVE"; joinedAt: string; memberships: Membership[] };
+type PaymentMovement = { id: string; amount: number | string; method: string; reference?: string; occurredAt: string; actor?: { id: string; name: string } };
+type Payment = { id: string; amount: number | string; paidAmount: number | string; dueDate?: string; status: string; createdAt: string; member: Pick<Member, "id" | "firstName" | "lastName" | "ci">; membership: { id: string; plan: Plan }; movements: PaymentMovement[] };
+type GymFinances = { totalBilled: number; totalCollected: number; pendingBalance: number; overdueBalance: number; monthlyRevenue: number; pendingPayments: number; recentMovements: Array<PaymentMovement & { payment: Payment }> };
 type Gym = {
   id: string;
   name: string;
@@ -36,6 +39,11 @@ const demoPlans: Plan[] = [
   { id: "p1", name: "Mensual", description: "Acceso completo durante 30 días", price: 1500, durationDays: 30, isActive: true },
   { id: "p2", name: "Trimestral", description: "Acceso completo durante 90 días", price: 4000, durationDays: 90, isActive: true },
 ];
+const demoPayments: Payment[] = [
+  { id: "pay-1", amount: 1500, paidAmount: 500, dueDate: new Date().toISOString(), status: "PARTIAL", createdAt: new Date().toISOString(), member: { id: "m-1", firstName: "Ana", lastName: "Pérez", ci: "90010112345" }, membership: { id: "ms-1", plan: demoPlans[0] }, movements: [] },
+  { id: "pay-2", amount: 4000, paidAmount: 4000, dueDate: new Date().toISOString(), status: "PAID", createdAt: new Date().toISOString(), member: { id: "m-2", firstName: "Luis", lastName: "Gómez", ci: "91020212345" }, membership: { id: "ms-2", plan: demoPlans[1] }, movements: [] },
+];
+const demoFinances: GymFinances = { totalBilled: 5500, totalCollected: 4500, pendingBalance: 1000, overdueBalance: 0, monthlyRevenue: 4500, pendingPayments: 1, recentMovements: [] };
 
 async function api<T>(path: string, token: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${API}${path}`, {
@@ -206,13 +214,16 @@ function ManageGym({ token, gym, demo, onClose, onChanged }: { token: string; gy
   const [admins, setAdmins] = useState<Admin[]>(gym.users);
   const [plans, setPlans] = useState<Plan[]>(demo ? demoPlans : []);
   const [members, setMembers] = useState<Member[]>([]);
-  const [tab, setTab] = useState<"gym" | "admins" | "plans" | "members">("gym");
+  const [payments, setPayments] = useState<Payment[]>(demo ? demoPayments : []);
+  const [finances, setFinances] = useState<GymFinances | null>(demo ? demoFinances : null);
+  const [tab, setTab] = useState<"gym" | "admins" | "plans" | "members" | "payments" | "finances">("gym");
   const [editingAdmin, setEditingAdmin] = useState<Admin | null>(null);
   const [editingPlan, setEditingPlan] = useState<Plan | null>(null);
   const [editingMember, setEditingMember] = useState<Member | null>(null);
   const [editingMembershipMember, setEditingMembershipMember] = useState<Member | null>(null);
   const [memberMemberships, setMemberMemberships] = useState<Membership[]>([]);
   const [editingMembership, setEditingMembership] = useState<Membership | null>(null);
+  const [editingPayment, setEditingPayment] = useState<Payment | null>(null);
   const [addingAdmin, setAddingAdmin] = useState(false);
   const [addingPlan, setAddingPlan] = useState(false);
   const [addingMember, setAddingMember] = useState(false);
@@ -228,13 +239,15 @@ function ManageGym({ token, gym, demo, onClose, onChanged }: { token: string; gy
     if (demo) return;
     setLoading(true);
     try {
-      const [nextGym, nextAdmins, nextPlans, nextMembers] = await Promise.all([
+      const [nextGym, nextAdmins, nextPlans, nextMembers, nextPayments, nextFinances] = await Promise.all([
         api<Gym>(`/platform/gyms/${gym.id}`, token),
         api<Admin[]>(`/platform/gyms/${gym.id}/admins`, token),
         api<Plan[]>(`/platform/gyms/${gym.id}/plans`, token),
         api<Member[]>(`/platform/gyms/${gym.id}/members${memberSearch ? `?search=${encodeURIComponent(memberSearch)}` : ""}`, token),
+        api<Payment[]>(`/platform/gyms/${gym.id}/payments`, token),
+        api<GymFinances>(`/platform/gyms/${gym.id}/finances`, token),
       ]);
-      setDetail(nextGym); setAdmins(nextAdmins); setPlans(nextPlans); setMembers(nextMembers);
+      setDetail(nextGym); setAdmins(nextAdmins); setPlans(nextPlans); setMembers(nextMembers); setPayments(nextPayments); setFinances(nextFinances);
     } catch (error) { setNotice({ message: (error as Error).message, tone: "error" }); }
     finally { setLoading(false); }
   }, [demo, gym.id, token]);
@@ -242,7 +255,7 @@ function ManageGym({ token, gym, demo, onClose, onChanged }: { token: string; gy
   useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer); }, [load]);
 
   const complete = async (message: string) => {
-    setNotice({ message, tone: "success" }); setEditingAdmin(null); setEditingPlan(null); setEditingMember(null); setEditingMembershipMember(null); setEditingMembership(null); setAddingAdmin(false); setAddingPlan(false); setAddingMember(false); setAddingMembership(false);
+    setNotice({ message, tone: "success" }); setEditingAdmin(null); setEditingPlan(null); setEditingMember(null); setEditingMembershipMember(null); setEditingMembership(null); setEditingPayment(null); setAddingAdmin(false); setAddingPlan(false); setAddingMember(false); setAddingMembership(false);
     await load(search); await onChanged();
   };
   const openMemberships = async (member: Member) => {
@@ -279,6 +292,8 @@ function ManageGym({ token, gym, demo, onClose, onChanged }: { token: string; gy
         <button className={tab === "admins" ? "active" : ""} onClick={() => setTab("admins")}>Administradores <span>{admins.length}</span></button>
         <button className={tab === "plans" ? "active" : ""} onClick={() => setTab("plans")}>Planes <span>{plans.length}</span></button>
         <button className={tab === "members" ? "active" : ""} onClick={() => setTab("members")}>Miembros <span>{detail._count.members}</span></button>
+        <button className={tab === "payments" ? "active" : ""} onClick={() => setTab("payments")}>Cobros <span>{payments.filter(payment => paymentBalance(payment) > 0 && payment.status !== "CANCELLED").length}</span></button>
+        <button className={tab === "finances" ? "active" : ""} onClick={() => setTab("finances")}>Finanzas</button>
       </div>
       {loading ? <div className="loading-block">Cargando información…</div> : <>
         {tab === "gym" && <GymEditor gym={detail} disabled={demo} onSave={async payload => { const updated=await api<Gym>(`/platform/gyms/${gym.id}`,token,{method:"PATCH",body:JSON.stringify(payload)}); setDetail({...detail,...updated}); await complete("Información actualizada"); }}/>}
@@ -299,6 +314,16 @@ function ManageGym({ token, gym, demo, onClose, onChanged }: { token: string; gy
           {editingMembershipMember && <section className="membership-manager"><div className="section-tools"><div><h3>Membresías de {editingMembershipMember.firstName} {editingMembershipMember.lastName}</h3><p>Edita directamente la membresía existente o añade una cuando no haya otra activa.</p></div><div className="membership-tools"><button onClick={() => setEditingMembershipMember(null)}>Cerrar</button><button className="primary" disabled={demo || hasActiveMembership(memberMemberships) || !plans.some(plan=>plan.isActive)} onClick={() => { setAddingMembership(true); setEditingMembership(null); }}>+ Añadir</button></div></div>{membershipLoading ? <div className="loading-block">Cargando membresías…</div> : <>{(addingMembership || editingMembership) && <MembershipEditor membership={editingMembership} plans={plans} currency={detail.currency ?? "CUP"} onCancel={() => { setAddingMembership(false); setEditingMembership(null); }} onSave={async payload => { const base=`/platform/gyms/${gym.id}/members/${editingMembershipMember.id}/memberships`; await api(editingMembership ? `${base}/${editingMembership.id}` : base,token,{method:editingMembership?"PATCH":"POST",body:JSON.stringify(payload)}); await complete(editingMembership ? "Membresía actualizada" : "Membresía añadida"); }}/>}<div className="membership-list">{memberMemberships.map(membership=><article className="membership-row" key={membership.id}><div><strong>{membership.plan.name}</strong><small>{membershipLabel(membership)}</small></div><div><strong>{membership.payment ? currencyValue(membership.payment.amount,detail.currency) : "Sin cobro"}</strong><small>{membership.payment ? `${currencyValue(membership.payment.paidAmount,detail.currency)} abonados · ${paymentLabel(membership.payment.status)}` : ""}</small></div><div className="row-actions"><button disabled={demo} onClick={() => { setEditingMembership(membership); setAddingMembership(false); }}>Editar</button><button className="danger-action" disabled={demo} onClick={() => void removeEntity(`/platform/gyms/${gym.id}/members/${editingMembershipMember.id}/memberships/${membership.id}`, `la membresía ${membership.plan.name}`)}>Eliminar</button></div></article>)}{!memberMemberships.length&&<p className="empty-copy">Este miembro no tiene membresías.</p>}</div></>}</section>}
           <div className="member-list">{members.map(member=>{const latest=activeMembership(member.memberships)??member.memberships[0];return <article className="member-row" key={member.id}><div className="entity-avatar member">{initials(`${member.firstName} ${member.lastName}`)}</div><div><strong>{member.firstName} {member.lastName}</strong><small>CI {member.ci} · {member.phone || "Sin teléfono"}</small></div><div><strong>{latest?.plan.name ?? "Sin plan"}</strong><small>{latest ? membershipLabel(latest) : "Sin membresía"}</small></div><span className={member.status === "ACTIVE" ? "state active" : "state"}>{member.status === "ACTIVE" ? "Activo" : "Inactivo"}</span><div className="row-actions"><button onClick={() => void openMemberships(member)}>Membresías</button><button disabled={demo} onClick={() => { setEditingMember(member); setAddingMember(false); setEditingMembershipMember(null); }}>Editar</button><button className="danger-action" disabled={demo} onClick={() => void removeEntity(`/platform/gyms/${gym.id}/members/${member.id}`, `el miembro ${member.firstName} ${member.lastName}`)}>Eliminar</button></div></article>})}{!members.length&&<p className="empty-copy">No se encontraron miembros.</p>}</div>
         </section>}
+        {tab === "payments" && <section className="manager-section">
+          <div className="section-tools"><div><h3>Cobros</h3><p>Consulta saldos y procesa abonos de las membresías del gimnasio.</p></div></div>
+          {editingPayment && (
+            <PaymentEditor payment={editingPayment} currency={detail.currency ?? "CUP"} onCancel={() => setEditingPayment(null)} onSave={async payload => { await api(`/platform/gyms/${gym.id}/payments/${editingPayment.id}/applications`, token, { method: "POST", body: JSON.stringify(payload) }); await complete("Pago procesado correctamente"); }}/>
+          )}
+          <div className="payment-list">{payments.map(payment=><article className="payment-row" key={payment.id}><div><strong>{payment.member.firstName} {payment.member.lastName}</strong><small>CI {payment.member.ci} · {payment.membership.plan.name}</small></div><div><strong>{currencyValue(payment.paidAmount, detail.currency)} / {currencyValue(payment.amount, detail.currency)}</strong><small>Saldo {currencyValue(paymentBalance(payment), detail.currency)}</small></div><span className={`state ${payment.status === "PAID" ? "active" : payment.status === "OVERDUE" ? "overdue" : ""}`}>{paymentLabel(payment.status)}</span><div className="row-actions"><button className="primary" disabled={demo || paymentBalance(payment) <= 0 || payment.status === "CANCELLED"} onClick={() => setEditingPayment(payment)}>{payment.status === "PAID" ? "Pagado" : "Procesar pago"}</button></div></article>)}{!payments.length&&<p className="empty-copy">No hay cobros registrados.</p>}</div>
+        </section>}
+        {tab === "finances" && (
+          <FinancePanel finances={finances} currency={detail.currency ?? "CUP"}/>
+        )}
       </>}
     </section>
     {pendingDelete && (
@@ -336,6 +361,17 @@ function MembershipEditor({ membership, plans, currency, onCancel, onSave }: { m
   return <form className="inline-editor membership-editor" onSubmit={submit}><div className="editor-heading"><div><strong>{membership?"Editar membresía":"Añadir membresía"}</strong><small>{membership?`${membership.plan.name} · ${membershipLabel(membership)}`:"Solo puede añadirse cuando el miembro no tiene otra activa"}</small></div></div><div className="form-grid"><label>Plan<select name="planId" defaultValue={currentPlanId} required>{availablePlans.map(plan=><option key={plan.id} value={plan.id}>{plan.name} · {currencyValue(plan.price,currency)} / {plan.durationDays} días</option>)}</select></label>{membership?<><label>Estado<select name="status" defaultValue={membership.status}><option value="ACTIVE">Activa</option><option value="SCHEDULED">Programada</option><option value="EXPIRED">Vencida</option><option value="CANCELLED">Cancelada</option></select></label><label>Fecha inicial<input name="startDate" type="date" defaultValue={dateInput(membership.startDate)} required/></label><label>Fecha final<input name="endDate" type="date" defaultValue={dateInput(membership.endDate)} required/></label></>:<><label>Abono inicial (opcional)<input name="initialPayment" type="number" min="0.01" step="0.01" value={initialPayment} onChange={event=>setInitialPayment(event.target.value)}/></label><label>Método de pago<select name="paymentMethod" defaultValue="" required={Number(initialPayment)>0}><option value="">Seleccionar</option><option value="CASH">Efectivo</option><option value="TRANSFER">Transferencia</option><option value="OTHER">Otro</option></select></label><label>Referencia<input name="reference" maxLength={100}/></label></>}</div>{membership?.payment&&<p className="logic-note">Cobro: {currencyValue(membership.payment.amount,currency)} · abonado {currencyValue(membership.payment.paidAmount,currency)}. Los abonos existentes no se modifican.</p>}{error&&<div className="form-error">{error}</div>}<div className="form-actions"><button type="button" onClick={onCancel}>Cancelar</button><button className="primary" disabled={saving||!availablePlans.length}>{saving?"Guardando…":membership?"Guardar membresía":"Añadir membresía"}</button></div></form>;
 }
 
+function PaymentEditor({ payment, currency, onCancel, onSave }: { payment: Payment; currency: string; onCancel: () => void; onSave: (payload: Record<string, unknown>) => Promise<void> }) {
+  const [error,setError]=useState(""); const [saving,setSaving]=useState(false); const balance=paymentBalance(payment);
+  const submit=async(event:FormEvent<HTMLFormElement>)=>{event.preventDefault();setSaving(true);setError("");const form=new FormData(event.currentTarget);const reference=String(form.get("reference")??"");const payload:Record<string,unknown>={amount:Number(form.get("amount")),method:form.get("method")};if(reference)payload.reference=reference;try{await onSave(payload);}catch(reason){setError((reason as Error).message);}finally{setSaving(false);}};
+  return <form className="inline-editor payment-editor" onSubmit={submit}><div className="editor-heading"><div><strong>Procesar pago</strong><small>{payment.member.firstName} {payment.member.lastName} · {payment.membership.plan.name}</small></div><strong>Saldo {currencyValue(balance,currency)}</strong></div><div className="form-grid three"><label>Importe<input name="amount" type="number" min="0.01" max={balance} step="0.01" defaultValue={balance} required/></label><label>Método<select name="method" defaultValue="CASH" required><option value="CASH">Efectivo</option><option value="TRANSFER">Transferencia</option><option value="OTHER">Otro</option></select></label><label>Referencia<input name="reference" maxLength={100} placeholder="Opcional"/></label></div>{error&&<div className="form-error">{error}</div>}<div className="form-actions"><button type="button" onClick={onCancel}>Cancelar</button><button className="primary" disabled={saving}>{saving?"Procesando…":"Confirmar pago"}</button></div></form>;
+}
+
+function FinancePanel({ finances, currency }: { finances: GymFinances | null; currency: string }) {
+  if (!finances) return <div className="loading-block">Cargando finanzas…</div>;
+  return <section className="manager-section finance-panel"><div className="section-tools"><div><h3>Finanzas</h3><p>Facturación, ingresos y deuda acumulada del gimnasio.</p></div></div><div className="finance-metrics"><article><span>Facturado</span><strong>{currencyValue(finances.totalBilled,currency)}</strong><small>Histórico total</small></article><article><span>Cobrado</span><strong>{currencyValue(finances.totalCollected,currency)}</strong><small>{currencyValue(finances.monthlyRevenue,currency)} este mes</small></article><article><span>Por cobrar</span><strong>{currencyValue(finances.pendingBalance,currency)}</strong><small>{finances.pendingPayments} cobros pendientes</small></article><article className={finances.overdueBalance > 0 ? "attention" : ""}><span>Deuda vencida</span><strong>{currencyValue(finances.overdueBalance,currency)}</strong><small>Requiere seguimiento</small></article></div><div className="finance-history"><h4>Movimientos recientes</h4>{finances.recentMovements.map(movement=><article key={movement.id}><div><strong>{movement.payment.member.firstName} {movement.payment.member.lastName}</strong><small>{movement.payment.membership.plan.name} · {paymentMethodLabel(movement.method)}</small></div><div><strong>{currencyValue(movement.amount,currency)}</strong><small>{new Date(movement.occurredAt).toLocaleString("es-CU")}</small></div></article>)}{!finances.recentMovements.length&&<p className="empty-copy">Todavía no hay movimientos de pago.</p>}</div></section>;
+}
+
 function MemberEditor({ member, onCancel, onSave }: { member: Member | null; onCancel: () => void; onSave: (payload: Record<string, unknown>) => Promise<void> }) {
   const [error,setError]=useState(""); const [saving,setSaving]=useState(false);
   const submit=async(event:FormEvent<HTMLFormElement>)=>{event.preventDefault();setSaving(true);setError("");const form=new FormData(event.currentTarget);const payload:Record<string,unknown>={ci:form.get("ci"),firstName:form.get("firstName"),lastName:form.get("lastName"),phone:form.get("phone"),address:form.get("address")};if(member)payload.status=form.get("status");try{await onSave(payload);}catch(reason){setError((reason as Error).message);}finally{setSaving(false);}};
@@ -371,6 +407,14 @@ function hasActiveMembership(memberships: Membership[]) {
 
 function paymentLabel(status: string) {
   return ({ PENDING: "pendiente", PARTIAL: "parcial", OVERDUE: "vencido", PAID: "pagado", CANCELLED: "cancelado" } as Record<string,string>)[status] ?? status.toLowerCase();
+}
+
+function paymentBalance(payment: Payment) {
+  return Math.max(0, Number(payment.amount) - Number(payment.paidAmount));
+}
+
+function paymentMethodLabel(method: string) {
+  return ({ CASH: "Efectivo", TRANSFER: "Transferencia", OTHER: "Otro" } as Record<string,string>)[method] ?? method;
 }
 
 function dateInput(value: string) {

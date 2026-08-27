@@ -51,6 +51,14 @@ test("keeps the product metadata and API integration configured", async () => {
   assert.match(page, /\/members/);
   assert.match(page, /\/plans/);
   assert.match(page, /\/memberships/);
+  assert.match(page, /\/payments/);
+  assert.match(page, /\/finances/);
+  assert.match(page, />Cobros/);
+  assert.match(page, />Finanzas</);
+  assert.match(page, /Procesar pago/);
+  assert.match(page, /Confirmar pago/);
+  assert.match(page, /Deuda vencida/);
+  assert.match(page, /Movimientos recientes/);
   assert.match(page, /Gestión de gimnasio/i);
   assert.match(page, /Guardar información/);
   assert.match(page, /Oferta comercial disponible/);

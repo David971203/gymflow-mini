@@ -251,6 +251,45 @@ export class MiniService {
     return { id, disposition: 'DELETED' };
   }
 
+  async listGymPayments(gymId: string) {
+    await this.requireGym(gymId);
+    return this.listPaymentsForGym(gymId);
+  }
+
+  async applyGymPayment(gymId: string, id: string, dto: ApplyPaymentDto, user: AuthUser) {
+    await this.requireGym(gymId);
+    return this.applyPaymentForGym(id, dto, gymId, user);
+  }
+
+  async getGymFinances(gymId: string) {
+    await this.requireGym(gymId);
+    await this.prisma.payment.updateMany({ where: { gymId, status: { in: [PaymentStatus.PENDING, PaymentStatus.PARTIAL] }, dueDate: { lt: new Date() } }, data: { status: PaymentStatus.OVERDUE } });
+    const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
+    const [payments, monthlyRevenue, recentMovements] = await Promise.all([
+      this.prisma.payment.findMany({ where: { gymId }, select: { amount: true, paidAmount: true, status: true } }),
+      this.prisma.paymentMovement.aggregate({ where: { payment: { gymId }, occurredAt: { gte: monthStart } }, _sum: { amount: true } }),
+      this.prisma.paymentMovement.findMany({
+        where: { payment: { gymId } },
+        include: { payment: { include: { member: true, membership: { include: { plan: true } } } }, actor: { select: { id: true, name: true } } },
+        orderBy: { occurredAt: 'desc' },
+        take: 20,
+      }),
+    ]);
+    const totalBilled = payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+    const totalCollected = payments.reduce((sum, payment) => sum + Number(payment.paidAmount), 0);
+    const pendingBalance = payments.reduce((sum, payment) => payment.status === PaymentStatus.CANCELLED ? sum : sum + Math.max(0, Number(payment.amount) - Number(payment.paidAmount)), 0);
+    const overdueBalance = payments.reduce((sum, payment) => payment.status === PaymentStatus.OVERDUE ? sum + Math.max(0, Number(payment.amount) - Number(payment.paidAmount)) : sum, 0);
+    return {
+      totalBilled: Number(totalBilled.toFixed(2)),
+      totalCollected: Number(totalCollected.toFixed(2)),
+      pendingBalance: Number(pendingBalance.toFixed(2)),
+      overdueBalance: Number(overdueBalance.toFixed(2)),
+      monthlyRevenue: Number(monthlyRevenue._sum.amount ?? 0),
+      pendingPayments: payments.filter(payment => payment.status === PaymentStatus.PENDING || payment.status === PaymentStatus.PARTIAL || payment.status === PaymentStatus.OVERDUE).length,
+      recentMovements,
+    };
+  }
+
   async platformOverview() {
     const start = new Date(); start.setDate(1); start.setHours(0, 0, 0, 0);
     const [gyms, activeGyms, members, newMembers, revenue, debtRows] = await Promise.all([
@@ -400,12 +439,20 @@ export class MiniService {
 
   async listPayments(user: AuthUser) {
     const gymId = this.gymId(user);
+    return this.listPaymentsForGym(gymId);
+  }
+
+  private async listPaymentsForGym(gymId: string) {
     await this.prisma.payment.updateMany({ where: { gymId, status: { in: [PaymentStatus.PENDING, PaymentStatus.PARTIAL] }, dueDate: { lt: new Date() } }, data: { status: PaymentStatus.OVERDUE } });
     return this.prisma.payment.findMany({ where: { gymId }, include: { member: true, membership: { include: { plan: true } }, movements: { orderBy: { occurredAt: 'desc' } } }, orderBy: { createdAt: 'desc' } });
   }
 
   async applyPayment(id: string, dto: ApplyPaymentDto, user: AuthUser) {
     const gymId = this.gymId(user);
+    return this.applyPaymentForGym(id, dto, gymId, user);
+  }
+
+  private async applyPaymentForGym(id: string, dto: ApplyPaymentDto, gymId: string, user: AuthUser) {
     if (dto.clientMutationId) {
       const repeated = await this.prisma.paymentMovement.findUnique({
         where: { clientMutationId: dto.clientMutationId },

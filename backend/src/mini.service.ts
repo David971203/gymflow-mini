@@ -3,7 +3,7 @@ import { MembershipStatus, PaymentStatus, Prisma, UserRole } from '@prisma/clien
 import * as argon2 from 'argon2';
 import { PrismaService } from './prisma.service';
 import type { AuthUser } from './common';
-import { ApplyPaymentDto, CreateGymAdminDto, CreateGymDto, CreateMemberDto, CreateMembershipDto, CreatePlanDto, RenewMembershipDto, UpdateGymAdminDto, UpdateGymDto, UpdateMemberDto, UpdatePlanDto } from './mini.dto';
+import { ApplyPaymentDto, AssignGymMembershipDto, CreateGymAdminDto, CreateGymDto, CreateMemberDto, CreateMembershipDto, CreatePlanDto, RenewMembershipDto, UpdateGymAdminDto, UpdateGymDto, UpdateGymMembershipDto, UpdateMemberDto, UpdatePlanDto } from './mini.dto';
 
 const membershipInclude = {
   member: { select: { id: true, gymId: true, ci: true, firstName: true, lastName: true, phone: true } },
@@ -101,6 +101,22 @@ export class MiniService {
     }
   }
 
+  async deleteGymAdmin(gymId: string, id: string) {
+    const admin = await this.prisma.user.findFirst({ where: { id, gymId, role: UserRole.ADMIN } });
+    if (!admin) throw new NotFoundException('Administrador no encontrado');
+    if (admin.isActive) {
+      const otherActiveAdmins = await this.prisma.user.count({ where: { gymId, role: UserRole.ADMIN, isActive: true, id: { not: id } } });
+      if (otherActiveAdmins === 0) throw new ConflictException('No se puede eliminar el único administrador activo del gimnasio');
+    }
+    const movements = await this.prisma.paymentMovement.count({ where: { actorUserId: id } });
+    if (movements > 0) {
+      await this.prisma.user.update({ where: { id }, data: { isActive: false } });
+      return { id, disposition: 'ARCHIVED' };
+    }
+    await this.prisma.user.delete({ where: { id } });
+    return { id, disposition: 'DELETED' };
+  }
+
   async listGymMembers(gymId: string, search?: string) {
     await this.requireGym(gymId);
     return this.prisma.member.findMany({
@@ -128,6 +144,111 @@ export class MiniService {
     } catch (error) {
       this.rethrowMemberCiConflict(error);
     }
+  }
+
+  async deleteGymMember(gymId: string, id: string) {
+    const member = await this.prisma.member.findFirst({ where: { id, gymId } });
+    if (!member) throw new NotFoundException('Miembro no encontrado');
+    const [memberships, payments] = await Promise.all([
+      this.prisma.membership.count({ where: { memberId: id } }),
+      this.prisma.payment.count({ where: { memberId: id, gymId } }),
+    ]);
+    if (memberships > 0 || payments > 0) {
+      await this.prisma.member.update({ where: { id }, data: { status: 'INACTIVE' } });
+      return { id, disposition: 'ARCHIVED' };
+    }
+    await this.prisma.member.delete({ where: { id } });
+    return { id, disposition: 'DELETED' };
+  }
+
+  async listGymPlans(gymId: string) {
+    await this.requireGym(gymId);
+    return this.prisma.plan.findMany({ where: { gymId }, orderBy: [{ isActive: 'desc' }, { price: 'asc' }] });
+  }
+
+  async createGymPlan(gymId: string, dto: CreatePlanDto) {
+    await this.requireGym(gymId);
+    return this.createPlanForGym(gymId, dto);
+  }
+
+  async updateGymPlan(gymId: string, id: string, dto: UpdatePlanDto) {
+    await this.requireGym(gymId);
+    return this.updatePlanForGym(gymId, id, dto);
+  }
+
+  async deleteGymPlan(gymId: string, id: string) {
+    await this.requireGym(gymId);
+    const plan = await this.prisma.plan.findFirst({ where: { id, gymId } });
+    if (!plan) throw new NotFoundException('Plan no encontrado');
+    const memberships = await this.prisma.membership.count({ where: { planId: id, member: { gymId } } });
+    if (memberships > 0) {
+      await this.prisma.plan.update({ where: { id }, data: { isActive: false } });
+      return { id, disposition: 'ARCHIVED' };
+    }
+    await this.prisma.plan.delete({ where: { id } });
+    return { id, disposition: 'DELETED' };
+  }
+
+  async createGymMembership(gymId: string, memberId: string, dto: AssignGymMembershipDto, user: AuthUser) {
+    await this.requireGym(gymId);
+    const active = await this.prisma.membership.findFirst({ where: { memberId, member: { gymId }, status: MembershipStatus.ACTIVE, endDate: { gte: new Date() } } });
+    if (active) throw new ConflictException('El miembro ya tiene una membresía activa');
+    return this.assignMembershipForGym({ ...dto, memberId }, gymId, user);
+  }
+
+  async listGymMemberships(gymId: string, memberId: string) {
+    await this.requireGym(gymId);
+    const member = await this.prisma.member.findFirst({ where: { id: memberId, gymId } });
+    if (!member) throw new NotFoundException('Miembro no encontrado');
+    return this.prisma.membership.findMany({ where: { memberId }, include: membershipInclude, orderBy: { createdAt: 'desc' } });
+  }
+
+  async updateGymMembership(gymId: string, memberId: string, id: string, dto: UpdateGymMembershipDto) {
+    await this.requireGym(gymId);
+    const current = await this.prisma.membership.findFirst({ where: { id, memberId, member: { gymId } }, include: { member: true, payment: { include: { movements: true } } } });
+    if (!current) throw new NotFoundException('Membresía no encontrada');
+    const planId = dto.planId ?? current.planId;
+    const plan = await this.prisma.plan.findFirst({ where: { id: planId, gymId, ...(planId !== current.planId ? { isActive: true } : {}) } });
+    if (!plan) throw new NotFoundException('Plan no encontrado o inactivo');
+    const startDate = dto.startDate ? new Date(dto.startDate) : current.startDate;
+    const endDate = dto.endDate ? new Date(dto.endDate) : dto.planId && dto.planId !== current.planId ? new Date(startDate.getTime() + plan.durationDays * 86400000) : current.endDate;
+    if (endDate <= startDate) throw new BadRequestException('La fecha final debe ser posterior a la fecha inicial');
+    const status = dto.status ?? current.status;
+    if (status === MembershipStatus.ACTIVE) {
+      if (current.member.status !== 'ACTIVE') throw new BadRequestException('El miembro debe estar activo');
+      const collision = await this.prisma.membership.findFirst({ where: { id: { not: id }, memberId, status: MembershipStatus.ACTIVE, endDate: { gte: new Date() } } });
+      if (collision) throw new ConflictException('El miembro ya tiene otra membresía activa');
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const membership = await tx.membership.update({ where: { id }, data: { planId, startDate, endDate, status } });
+      if (current.payment) {
+        const amount = planId !== current.planId ? Number(plan.price) : Number(current.payment.amount);
+        const paidAmount = Number(current.payment.paidAmount);
+        if (paidAmount > amount) throw new BadRequestException('El importe abonado supera el precio del nuevo plan');
+        const paymentStatus = status === MembershipStatus.CANCELLED ? PaymentStatus.CANCELLED : paidAmount === 0 ? PaymentStatus.PENDING : paidAmount >= amount ? PaymentStatus.PAID : PaymentStatus.PARTIAL;
+        await tx.payment.update({ where: { id: current.payment.id }, data: { amount, dueDate: startDate, status: paymentStatus, paidAt: paymentStatus === PaymentStatus.PAID ? current.payment.paidAt ?? new Date() : null } });
+      }
+      return tx.membership.findUniqueOrThrow({ where: { id: membership.id }, include: membershipInclude });
+    });
+  }
+
+  async deleteGymMembership(gymId: string, memberId: string, id: string) {
+    await this.requireGym(gymId);
+    const membership = await this.prisma.membership.findFirst({ where: { id, memberId, member: { gymId } }, include: { payment: { include: { movements: true } } } });
+    if (!membership) throw new NotFoundException('Membresía no encontrada');
+    const hasFinancialHistory = membership.payment && (Number(membership.payment.paidAmount) > 0 || membership.payment.movements.length > 0);
+    if (hasFinancialHistory) {
+      await this.prisma.$transaction([
+        this.prisma.membership.update({ where: { id }, data: { status: MembershipStatus.CANCELLED } }),
+        this.prisma.payment.update({ where: { id: membership.payment!.id }, data: { status: PaymentStatus.CANCELLED } }),
+      ]);
+      return { id, disposition: 'ARCHIVED' };
+    }
+    await this.prisma.$transaction(async (tx) => {
+      if (membership.payment) await tx.payment.delete({ where: { id: membership.payment.id } });
+      await tx.membership.delete({ where: { id } });
+    });
+    return { id, disposition: 'DELETED' };
   }
 
   async platformOverview() {
@@ -181,6 +302,10 @@ export class MiniService {
 
   async createPlan(dto: CreatePlanDto, user: AuthUser) {
     const gymId = this.gymId(user);
+    return this.createPlanForGym(gymId, dto);
+  }
+
+  private async createPlanForGym(gymId: string, dto: CreatePlanDto) {
     const { clientId, ...data } = dto;
     if (clientId) {
       const existing = await this.prisma.plan.findUnique({ where: { id: clientId } });
@@ -189,7 +314,12 @@ export class MiniService {
         return existing;
       }
     }
-    return this.prisma.plan.create({ data: { ...(clientId ? { id: clientId } : {}), ...data, gymId } });
+    try {
+      return await this.prisma.plan.create({ data: { ...(clientId ? { id: clientId } : {}), ...data, gymId } });
+    } catch (error) {
+      if (this.isUniqueConflict(error, 'name')) throw new ConflictException('Ya existe un plan con ese nombre en el gimnasio');
+      throw error;
+    }
   }
 
   listPlans(user: AuthUser) {
@@ -197,9 +327,18 @@ export class MiniService {
   }
 
   async updatePlan(id: string, dto: UpdatePlanDto, user: AuthUser) {
-    const plan = await this.prisma.plan.findFirst({ where: { id, gymId: this.gymId(user) } });
+    return this.updatePlanForGym(this.gymId(user), id, dto);
+  }
+
+  private async updatePlanForGym(gymId: string, id: string, dto: UpdatePlanDto) {
+    const plan = await this.prisma.plan.findFirst({ where: { id, gymId } });
     if (!plan) throw new NotFoundException('Plan no encontrado');
-    return this.prisma.plan.update({ where: { id }, data: dto });
+    try {
+      return await this.prisma.plan.update({ where: { id }, data: dto });
+    } catch (error) {
+      if (this.isUniqueConflict(error, 'name')) throw new ConflictException('Ya existe un plan con ese nombre en el gimnasio');
+      throw error;
+    }
   }
 
   listMemberships(user: AuthUser, memberId?: string) {
@@ -220,6 +359,10 @@ export class MiniService {
 
   private async assignMembership(dto: CreateMembershipDto, user: AuthUser) {
     const gymId = this.gymId(user);
+    return this.assignMembershipForGym(dto, gymId, user);
+  }
+
+  private async assignMembershipForGym(dto: CreateMembershipDto, gymId: string, user: AuthUser) {
     if (dto.clientMutationId) {
       const repeated = await this.prisma.membership.findUnique({ where: { clientMutationId: dto.clientMutationId }, include: membershipInclude });
       if (repeated) {

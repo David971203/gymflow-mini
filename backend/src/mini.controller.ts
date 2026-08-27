@@ -1,9 +1,9 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import { CurrentUser, Roles, type AuthUser } from './common';
 import { MiniService } from './mini.service';
-import { ApplyPaymentDto, CreateGymAdminDto, CreateGymDto, CreateMemberDto, CreateMembershipDto, CreatePlanDto, RenewMembershipDto, UpdateGymAdminDto, UpdateGymDto, UpdateGymStatusDto, UpdateMemberDto, UpdatePlanDto } from './mini.dto';
+import { ApplyPaymentDto, AssignGymMembershipDto, CreateGymAdminDto, CreateGymDto, CreateMemberDto, CreateMembershipDto, CreatePlanDto, RenewMembershipDto, UpdateGymAdminDto, UpdateGymDto, UpdateGymMembershipDto, UpdateGymStatusDto, UpdateMemberDto, UpdatePlanDto } from './mini.dto';
 
 @ApiTags('super-admin')
 @Controller('platform')
@@ -19,9 +19,19 @@ export class PlatformController {
   @Get('gyms/:gymId/admins') admins(@Param('gymId') gymId: string) { return this.mini.listGymAdmins(gymId); }
   @Post('gyms/:gymId/admins') createAdmin(@Param('gymId') gymId: string, @Body() dto: CreateGymAdminDto) { return this.mini.createGymAdmin(gymId, dto); }
   @Patch('gyms/:gymId/admins/:id') updateAdmin(@Param('gymId') gymId: string, @Param('id') id: string, @Body() dto: UpdateGymAdminDto) { return this.mini.updateGymAdmin(gymId, id, dto); }
+  @Delete('gyms/:gymId/admins/:id') deleteAdmin(@Param('gymId') gymId: string, @Param('id') id: string) { return this.mini.deleteGymAdmin(gymId, id); }
+  @Get('gyms/:gymId/plans') plans(@Param('gymId') gymId: string) { return this.mini.listGymPlans(gymId); }
+  @Post('gyms/:gymId/plans') createPlan(@Param('gymId') gymId: string, @Body() dto: CreatePlanDto) { return this.mini.createGymPlan(gymId, dto); }
+  @Patch('gyms/:gymId/plans/:id') updatePlan(@Param('gymId') gymId: string, @Param('id') id: string, @Body() dto: UpdatePlanDto) { return this.mini.updateGymPlan(gymId, id, dto); }
+  @Delete('gyms/:gymId/plans/:id') deletePlan(@Param('gymId') gymId: string, @Param('id') id: string) { return this.mini.deleteGymPlan(gymId, id); }
   @Get('gyms/:gymId/members') gymMembers(@Param('gymId') gymId: string, @Query('search') search?: string) { return this.mini.listGymMembers(gymId, search); }
   @Post('gyms/:gymId/members') createGymMember(@Param('gymId') gymId: string, @Body() dto: CreateMemberDto) { return this.mini.createGymMember(gymId, dto); }
   @Patch('gyms/:gymId/members/:id') updateGymMember(@Param('gymId') gymId: string, @Param('id') id: string, @Body() dto: UpdateMemberDto) { return this.mini.updateGymMember(gymId, id, dto); }
+  @Delete('gyms/:gymId/members/:id') deleteGymMember(@Param('gymId') gymId: string, @Param('id') id: string) { return this.mini.deleteGymMember(gymId, id); }
+  @Get('gyms/:gymId/members/:memberId/memberships') gymMemberships(@Param('gymId') gymId: string, @Param('memberId') memberId: string) { return this.mini.listGymMemberships(gymId, memberId); }
+  @Post('gyms/:gymId/members/:memberId/memberships') assignGymMembership(@Param('gymId') gymId: string, @Param('memberId') memberId: string, @Body() dto: AssignGymMembershipDto, @CurrentUser() user: AuthUser) { return this.mini.createGymMembership(gymId, memberId, dto, user); }
+  @Patch('gyms/:gymId/members/:memberId/memberships/:id') updateGymMembership(@Param('gymId') gymId: string, @Param('memberId') memberId: string, @Param('id') id: string, @Body() dto: UpdateGymMembershipDto) { return this.mini.updateGymMembership(gymId, memberId, id, dto); }
+  @Delete('gyms/:gymId/members/:memberId/memberships/:id') deleteGymMembership(@Param('gymId') gymId: string, @Param('memberId') memberId: string, @Param('id') id: string) { return this.mini.deleteGymMembership(gymId, memberId, id); }
 }
 
 @ApiTags('admin')

@@ -1,4 +1,4 @@
-import { PaymentMethod } from '@prisma/client';
+import { MembershipStatus, PaymentMethod } from '@prisma/client';
 import { Type } from 'class-transformer';
 import { IsArray, IsBoolean, IsDateString, IsEmail, IsEnum, IsIn, IsInt, IsNumber, IsObject, IsOptional, IsString, IsUUID, Matches, MaxLength, Min, MinLength, ArrayMaxSize, ArrayMinSize, ValidateNested } from 'class-validator';
 
@@ -88,6 +88,25 @@ export class CreateMembershipDto {
   @IsOptional() @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) initialPayment?: number;
   @IsOptional() @IsEnum(PaymentMethod) paymentMethod?: PaymentMethod;
   @IsOptional() @IsString() @MaxLength(100) reference?: string;
+}
+
+export class AssignGymMembershipDto {
+  @IsOptional() @IsUUID() clientMembershipId?: string;
+  @IsOptional() @IsUUID() clientPaymentId?: string;
+  @IsOptional() @IsUUID() clientMutationId?: string;
+  @IsOptional() @IsDateString() occurredAt?: string;
+  @IsString() planId: string;
+  @IsOptional() @IsDateString() startDate?: string;
+  @IsOptional() @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) initialPayment?: number;
+  @IsOptional() @IsEnum(PaymentMethod) paymentMethod?: PaymentMethod;
+  @IsOptional() @IsString() @MaxLength(100) reference?: string;
+}
+
+export class UpdateGymMembershipDto {
+  @IsOptional() @IsString() planId?: string;
+  @IsOptional() @IsDateString() startDate?: string;
+  @IsOptional() @IsDateString() endDate?: string;
+  @IsOptional() @IsEnum(MembershipStatus) status?: MembershipStatus;
 }
 
 export class RenewMembershipDto {

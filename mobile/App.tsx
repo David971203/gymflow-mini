@@ -1,24 +1,45 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, AppState, Easing, Image, Modal, Pressable, RefreshControl, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, AppState, Easing, Image, Modal, Pressable, RefreshControl, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, useColorScheme, View } from 'react-native';
 import * as Network from 'expo-network';
+import * as SecureStore from 'expo-secure-store';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
+import { Ionicons } from '@expo/vector-icons';
 import { api } from './src/api';
 import { discardSyncIssue, getSyncIssues, getSyncState, initializeOffline, offline, subscribeOffline, syncNow } from './src/offline';
-import type { Dashboard, Member, Payment, Plan, SyncIssue, SyncState, Tab, User } from './src/types';
+import type { Currency, Dashboard, Member, MemberSex, Payment, Plan, SyncIssue, SyncState, Tab, User } from './src/types';
 
-const money = (value: number | string) => `$${Number(value).toLocaleString('es-CU')} CUP`;
-const tabs: { id: Tab; icon: string; label: string }[] = [
-  { id: 'INICIO', icon: '⌂', label: 'Inicio' }, { id: 'MIEMBROS', icon: '◉', label: 'Miembros' },
-  { id: 'PLANES', icon: '▣', label: 'Planes' }, { id: 'CAJA', icon: '$', label: 'Caja' }, { id: 'CUENTA', icon: '●', label: 'Cuenta' },
+let activeCurrency: Currency = 'CUP';
+const money = (value: number | string) => `${Number(value).toLocaleString('es-CU', { maximumFractionDigits: 2 })} ${activeCurrency}`;
+type TabIconName = React.ComponentProps<typeof Ionicons>['name'];
+const tabs: { id: Tab; icon: TabIconName; activeIcon: TabIconName; label: string }[] = [
+  { id:'INICIO', icon:'home-outline', activeIcon:'home', label:'Inicio' },
+  { id:'MIEMBROS', icon:'people-outline', activeIcon:'people', label:'Miembros' },
+  { id:'PLANES', icon:'pricetags-outline', activeIcon:'pricetags', label:'Planes' },
+  { id:'CAJA', icon:'cash-outline', activeIcon:'cash', label:'Caja' },
+  { id:'CUENTA', icon:'person-circle-outline', activeIcon:'person-circle', label:'Cuenta' },
 ];
+type ThemePreference = 'system' | 'light' | 'dark';
+const THEME_STORAGE_KEY = 'gymflow_mini_theme';
+const SHOW_THEME_SELECTOR = false;
+let activeDarkTheme = false;
 
 export default function App() {
+  const systemScheme = useColorScheme();
+  const [themePreference, setThemePreference] = useState<ThemePreference>('light');
   const [user, setUser] = useState<User | null>(null);
   const [restoring, setRestoring] = useState(true);
-  useEffect(() => { api.restore().then(setUser).catch(() => undefined).finally(() => setRestoring(false)); }, []);
+  const dark = themePreference === 'system' ? systemScheme === 'dark' : themePreference === 'dark';
+  activeDarkTheme = dark;
+  useEffect(() => {
+    Promise.all([api.restore().catch(() => null), SecureStore.getItemAsync(THEME_STORAGE_KEY).catch(() => null)]).then(([restoredUser, storedTheme]) => {
+      setUser(restoredUser);
+      if (storedTheme === 'system' || storedTheme === 'light' || storedTheme === 'dark') setThemePreference(storedTheme);
+    }).finally(() => setRestoring(false));
+  }, []);
+  const changeTheme = (nextTheme: ThemePreference) => { setThemePreference(nextTheme); void SecureStore.setItemAsync(THEME_STORAGE_KEY, nextTheme).catch(showError); };
   if (restoring) return <View style={styles.center}><ActivityIndicator color="#c9f47b" size="large" /></View>;
   if (!user) return <Login onLogin={setUser} />;
-  return <AdminApp user={user} onLogout={async () => { await api.logout(); setUser(null); }} />;
+  return <AdminApp user={user} dark={dark} themePreference={themePreference} onThemeChange={changeTheme} onLogout={async () => { await api.logout(); setUser(null); }} />;
 }
 
 function Login({ onLogin }: { onLogin: (user: User) => void }) {
@@ -46,11 +67,12 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
   </SafeAreaView>;
 }
 
-function AdminApp({ user, onLogout }: { user: User; onLogout: () => void }) {
+function AdminApp({ user, dark, themePreference, onThemeChange, onLogout }: { user: User; dark: boolean; themePreference: ThemePreference; onThemeChange: (theme: ThemePreference) => void; onLogout: () => void }) {
   const [tab, setTab] = useState<Tab>('INICIO');
   const [ready, setReady] = useState(false); const [revision, setRevision] = useState(0); const [issuesOpen, setIssuesOpen] = useState(false);
   const [syncState, setSyncState] = useState<SyncState>({ phase: 'STARTING', pending: 0, rejected: 0 });
   const scope = user.gymId;
+  activeCurrency = user.gym.currency;
   useEffect(() => {
     let mounted = true;
     const unsubscribe = subscribeOffline(() => { if (mounted) { setRevision((value) => value + 1); setSyncState(getSyncState(scope)); } });
@@ -60,7 +82,7 @@ function AdminApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     return () => { mounted = false; unsubscribe(); networkSubscription.remove(); appSubscription.remove(); };
   }, [scope]);
   if (!ready) return <View style={styles.center}><ActivityIndicator color="#c9f47b" size="large" /></View>;
-  return <SafeAreaView style={styles.app}><StatusBar barStyle="dark-content" />
+  return <SafeAreaView style={styles.app}><StatusBar barStyle={dark ? "light-content" : "dark-content"} />
     <View style={styles.topbar}>
       <View><Text style={styles.kicker}>{user.gym.name.toUpperCase()}</Text><Text style={styles.screenTitle}>{tabs.find((item) => item.id === tab)?.label}</Text></View>
     </View>
@@ -70,11 +92,9 @@ function AdminApp({ user, onLogout }: { user: User; onLogout: () => void }) {
       {tab === 'MIEMBROS' && <MembersScreen scope={scope} revision={revision} />}
       {tab === 'PLANES' && <PlansScreen scope={scope} revision={revision} />}
       {tab === 'CAJA' && <PaymentsScreen scope={scope} revision={revision} />}
-      {tab === 'CUENTA' && <AccountScreen user={user} onLogout={onLogout} />}
+      {tab === 'CUENTA' && <AccountScreen user={user} themePreference={themePreference} onThemeChange={onThemeChange} onLogout={onLogout} />}
     </View>
-    <View style={styles.tabbar}>{tabs.map((item) => <Pressable key={item.id} onPress={() => setTab(item.id)} style={styles.tab}>
-      <Text style={[styles.tabIcon, tab === item.id && styles.tabActive]}>{item.icon}</Text><Text style={[styles.tabLabel, tab === item.id && styles.tabActive]}>{item.label}</Text>
-    </Pressable>)}</View>
+    <View style={styles.tabbar}>{tabs.map((item) => { const active=tab===item.id; return <Pressable accessibilityRole="tab" accessibilityState={{selected:active}} accessibilityLabel={item.label} key={item.id} onPress={() => setTab(item.id)} style={({pressed}) => [styles.tab,pressed&&styles.tabPressed]}><View style={[styles.tabIconWrap,active&&styles.tabIconWrapActive]}><Ionicons name={active?item.activeIcon:item.icon} size={21} color={active?(activeDarkTheme?'#c9f47b':'#1d6b4d'):(activeDarkTheme?'#adb7b1':'#657169')}/></View><Text style={[styles.tabLabel,active&&styles.tabActive]}>{item.label}</Text></Pressable>;})}</View>
     <SyncIssues open={issuesOpen} scope={scope} revision={revision} onClose={() => setIssuesOpen(false)} />
   </SafeAreaView>;
 }
@@ -87,7 +107,7 @@ function DashboardScreen({ scope, revision }: ScreenProps) {
   const load = useCallback(() => { setLoading(true); offline.dashboard(scope).then(setData).catch(showError).finally(() => setLoading(false)); }, [scope]);
   const refresh = useCallback(() => { setLoading(true); syncNow(scope).then(() => offline.dashboard(scope)).then(setData).catch(showError).finally(() => setLoading(false)); }, [scope]);
   useEffect(load, [load, revision]);
-  return <ScrollView refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} />} contentContainerStyle={styles.scroll}>
+  return <ScrollView refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} colors={[activeDarkTheme ? '#c9f47b' : '#1d6b4d']} tintColor={activeDarkTheme ? '#c9f47b' : '#1d6b4d'} progressBackgroundColor={activeDarkTheme ? '#212923' : '#fff'} />} contentContainerStyle={styles.scroll}>
     <View style={styles.hero}><Text style={styles.heroLabel}>INGRESOS DE AGOSTO</Text><Text style={styles.heroValue}>{money(data?.monthlyRevenue ?? 0)}</Text><Text style={styles.heroHint}>Dinero realmente cobrado</Text></View>
     <View style={styles.metricGrid}><Metric label="Miembros" value={data?.members ?? 0} /><Metric label="Membresías activas" value={data?.activeMemberships ?? 0} /><Metric label="Por cobrar" value={money(data?.pendingDebt ?? 0)} wide /></View>
     <SectionTitle title="Últimos cobros" subtitle="Movimientos registrados por el gimnasio" />
@@ -95,12 +115,21 @@ function DashboardScreen({ scope, revision }: ScreenProps) {
   </ScrollView>;
 }
 
-function AccountScreen({ user, onLogout }: { user: User; onLogout: () => void }) {
+function AccountScreen({ user, themePreference, onThemeChange, onLogout }: { user: User; themePreference: ThemePreference; onThemeChange: (theme: ThemePreference) => void; onLogout: () => void }) {
   const confirmLogout = () => Alert.alert('Cerrar sesión', '¿Deseas salir de GymFlow Mini en este dispositivo?', [{ text:'Cancelar', style:'cancel' }, { text:'Cerrar sesión', style:'destructive', onPress:onLogout }]);
-  return <ScrollView contentContainerStyle={styles.accountScroll}><View style={styles.accountHero}><Text style={styles.accountHeroLabel}>GIMNASIO</Text><Text style={styles.accountHeroGym}>{user.gym.name}</Text></View><View style={styles.accountCard}><AccountRow label="Administrador" value={user.name}/><AccountRow label="Correo" value={user.email}/><AccountRow label="Gimnasio" value={user.gym.name}/><AccountRow label="Moneda" value={user.gym.currency}/><AccountRow label="Rol" value="Administrador" last/></View><Pressable accessibilityRole="button" onPress={confirmLogout} style={({pressed}) => [styles.logoutButton, pressed && styles.logoutButtonPressed]}><View style={styles.logoutIcon}><Text style={styles.logoutIconText}>↪</Text></View><View style={styles.rowMain}><Text style={styles.logoutTitle}>Cerrar sesión</Text><Text style={styles.logoutCopy}>Salir de esta cuenta en el dispositivo</Text></View></Pressable><Text style={styles.accountVersion}>GYMFLOW MINI · PILOTO CUBA · V0.1</Text></ScrollView>;
+  return <ScrollView contentContainerStyle={styles.accountScroll}><View style={styles.accountHero}><Text style={styles.accountHeroLabel}>GIMNASIO</Text><Text style={styles.accountHeroGym}>{user.gym.name}</Text></View><View style={styles.accountCard}><AccountRow label="Administrador" value={user.name}/><AccountRow label="Correo" value={user.email}/><AccountRow label="Gimnasio" value={user.gym.name}/><AccountRow label="Moneda" value={user.gym.currency} last/></View>{SHOW_THEME_SELECTOR ? <ThemeSelector value={themePreference} onChange={onThemeChange}/> : null}<Pressable accessibilityRole="button" onPress={confirmLogout} style={({pressed}) => [styles.logoutButton, pressed && styles.logoutButtonPressed]}><View style={styles.logoutIcon}><Text style={styles.logoutIconText}>↪</Text></View><View style={styles.rowMain}><Text style={styles.logoutTitle}>Cerrar sesión</Text><Text style={styles.logoutCopy}>Salir de esta cuenta en el dispositivo</Text></View></Pressable><Text style={styles.accountVersion}>GYMFLOW MINI · PILOTO CUBA · V0.1</Text></ScrollView>;
 }
 
 function AccountRow({ label, value, last }: { label: string; value: string; last?: boolean }) { return <View style={[styles.accountRow,last&&styles.accountRowLast]}><Text style={styles.accountLabel}>{label}</Text><Text style={styles.accountValue}>{value}</Text></View>; }
+
+function ThemeSelector({ value, onChange }: { value: ThemePreference; onChange: (theme: ThemePreference) => void }) {
+  const options: Array<{ id: ThemePreference; label: string; copy: string }> = [
+    { id:'system', label:'Sistema', copy:'Usa el tema del teléfono' },
+    { id:'light', label:'Claro', copy:'Siempre luminoso' },
+    { id:'dark', label:'Oscuro', copy:'Siempre oscuro' },
+  ];
+  return <View style={styles.themeCard}><Text style={styles.themeTitle}>Apariencia</Text><Text style={styles.themeCopy}>Elige cómo quieres ver GymFlow en este dispositivo.</Text><View style={styles.themeOptions}>{options.map(option => { const selected=value===option.id; return <Pressable key={option.id} accessibilityRole="radio" accessibilityState={{selected}} onPress={() => onChange(option.id)} style={({pressed}) => [styles.themeOption,selected&&styles.themeOptionActive,pressed&&styles.themeOptionPressed]}><View style={styles.rowMain}><Text style={[styles.themeOptionTitle,selected&&styles.themeOptionTitleActive]}>{option.label}</Text><Text style={styles.themeOptionCopy}>{option.copy}</Text></View><View style={[styles.themeRadio,selected&&styles.themeRadioActive]}>{selected?<View style={styles.themeRadioDot}/>:null}</View></Pressable>;})}</View></View>;
+}
 
 function MembersScreen({ scope, revision }: ScreenProps) {
   const [members, setMembers] = useState<Member[]>([]); const [plans, setPlans] = useState<Plan[]>([]);
@@ -108,15 +137,15 @@ function MembersScreen({ scope, revision }: ScreenProps) {
   const load = useCallback(() => { setLoading(true); Promise.all([offline.members(scope), offline.plans(scope)]).then(([m, p]) => { setMembers(m); setPlans(p); }).catch(showError).finally(() => setLoading(false)); }, [scope]);
   const refresh = useCallback(() => { void syncNow(scope).then(load); }, [scope, load]);
   const confirmDelete = (member: Member) => Alert.alert('Eliminar miembro', `¿Deseas eliminar a ${member.firstName} ${member.lastName}? Si tiene historial, se archivará como inactivo.`, [{ text:'Cancelar', style:'cancel' }, { text:'Eliminar', style:'destructive', onPress:() => { void offline.deleteMember(scope, member.id).then(() => { setSelected(null); load(); }).catch(showError); } }]);
-  const query=search.trim().toLocaleLowerCase('es'); const visibleMembers=query ? members.filter(member => `${member.firstName} ${member.lastName} ${member.ci} ${member.phone ?? ''} ${member.address ?? ''}`.toLocaleLowerCase('es').includes(query)) : members;
+  const query=search.trim().toLocaleLowerCase('es'); const visibleMembers=query ? members.filter(member => `${member.firstName} ${member.lastName} ${member.code ?? ''} ${member.ci} ${member.age ?? ''} ${sexLabel(member.sex)} ${member.phone ?? ''} ${member.address ?? ''}`.toLocaleLowerCase('es').includes(query)) : members;
   useEffect(load, [load, revision]);
   return <>
-    <ScrollView refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} />} contentContainerStyle={styles.scroll}>
+    <ScrollView refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} colors={[activeDarkTheme ? '#c9f47b' : '#1d6b4d']} tintColor={activeDarkTheme ? '#c9f47b' : '#1d6b4d'} progressBackgroundColor={activeDarkTheme ? '#212923' : '#fff'} />} contentContainerStyle={styles.scroll}>
       <PrimaryButton label="+ Registrar miembro" onPress={() => setAddOpen(true)} />
-      <View style={styles.memberSearch}><Text style={styles.memberSearchIcon}>⌕</Text><TextInput accessibilityLabel="Buscar miembros" value={search} onChangeText={setSearch} placeholder="Nombre, CI, teléfono o dirección" placeholderTextColor="#97a19b" autoCorrect={false} style={styles.memberSearchInput}/>{search ? <Pressable accessibilityRole="button" accessibilityLabel="Limpiar búsqueda" onPress={() => setSearch('')} style={styles.memberSearchClear}><Text style={styles.memberSearchClearText}>×</Text></Pressable> : null}</View>
+      <View style={styles.memberSearch}><Text style={styles.memberSearchIcon}>⌕</Text><TextInput accessibilityLabel="Buscar miembros" value={search} onChangeText={setSearch} placeholder="Nombre, código, CI o teléfono" placeholderTextColor={activeDarkTheme ? '#aab7b0' : '#657169'} autoCorrect={false} style={styles.memberSearchInput}/>{search ? <Pressable accessibilityRole="button" accessibilityLabel="Limpiar búsqueda" onPress={() => setSearch('')} style={styles.memberSearchClear}><Text style={styles.memberSearchClearText}>×</Text></Pressable> : null}</View>
       <SectionTitle title={query ? `${visibleMembers.length} resultado${visibleMembers.length === 1 ? '' : 's'}` : `${members.length} miembros`} subtitle={query ? `Búsqueda dinámica entre ${members.length} miembros` : "Toca un miembro para ver sus opciones"} />
       <View style={styles.card}>{visibleMembers.map(member => { const current = editableMembership(member) ?? member.memberships[0]; return <Pressable accessibilityRole="button" accessibilityLabel={`Opciones de ${member.firstName} ${member.lastName}`} onPress={() => setSelected(member)} key={member.id} style={({pressed}) => [styles.memberRow, pressed && styles.memberRowPressed]}>
-        <View style={styles.memberAvatar}><Text style={styles.memberAvatarText}>{member.firstName[0]}{member.lastName[0]}</Text></View><View style={styles.rowMain}><Text style={styles.rowTitle}>{member.firstName} {member.lastName}</Text><Text style={styles.rowSubtitle}>CI {member.ci}</Text><View style={styles.memberPlanLine}><View style={[styles.memberPlanDot, current && styles.memberPlanDotActive]}/><Text style={styles.memberPlanText}>{current ? `${current.plan.name} · ${membershipStatusLabel(current.status)}` : 'Sin plan asignado'}</Text></View></View><Text style={styles.memberChevron}>›</Text>
+        <View style={styles.memberAvatar}><Text style={styles.memberAvatarText}>{member.firstName[0]}{member.lastName[0]}</Text></View><View style={styles.rowMain}><Text style={styles.rowTitle}>{member.firstName} {member.lastName}</Text><Text style={styles.rowSubtitle}>{member.code ? `Código ${member.code} · ` : ''}CI {member.ci}</Text><View style={styles.memberPlanLine}><View style={[styles.memberPlanDot, current && styles.memberPlanDotActive]}/><Text style={styles.memberPlanText}>{current ? `${current.plan.name} · ${membershipStatusLabel(current.status)}` : 'Sin plan asignado'}</Text></View></View><Text style={styles.memberChevron}>›</Text>
       </Pressable>; })}{!visibleMembers.length && <Empty text={query ? "No se encontraron miembros" : "Registra tu primer miembro"} />}</View>
     </ScrollView>
     <MemberActions member={selected} onClose={() => setSelected(null)} onEdit={() => { if (selected) setEditing(selected); setSelected(null); }} onPlan={() => { if (selected) setAssigning(selected); setSelected(null); }} onDelete={() => { if (selected) confirmDelete(selected); }} />
@@ -126,8 +155,11 @@ function MembersScreen({ scope, revision }: ScreenProps) {
 }
 
 function MemberActions({ member, onClose, onEdit, onPlan, onDelete }: { member: Member | null; onClose: () => void; onEdit: () => void; onPlan: () => void; onDelete: () => void }) {
-  const editable = member ? editableMembership(member) : undefined; const membership = editable ?? member?.memberships[0];
-  return <Sheet open={!!member} title="Opciones del miembro" onClose={onClose}><View style={styles.memberProfile}><View style={styles.memberProfileAvatar}><Text style={styles.memberProfileInitials}>{member ? `${member.firstName[0]}${member.lastName[0]}` : ''}</Text></View><View style={styles.rowMain}><Text style={styles.memberProfileName}>{member?.firstName} {member?.lastName}</Text><Text style={styles.memberProfileMeta}>CI {member?.ci}{member?.phone ? ` · ${member.phone}` : ''}</Text><Text style={styles.memberProfilePlan}>{membership ? `${membership.plan.name} · ${membershipStatusLabel(membership.status)}` : 'Sin membresía vigente'}</Text></View></View><View style={styles.memberActionGrid}><Pressable accessibilityRole="button" onPress={onEdit} style={({pressed}) => [styles.memberActionCard, pressed && styles.memberActionCardPressed]}><View style={styles.memberActionIcon}><Text style={styles.memberActionIconText}>✎</Text></View><View style={styles.rowMain}><Text style={styles.memberActionTitle}>Editar datos</Text><Text style={styles.memberActionCopy}>Nombre, CI, teléfono, dirección y estado</Text></View><Text style={styles.memberActionChevron}>›</Text></Pressable><Pressable accessibilityRole="button" onPress={onPlan} style={({pressed}) => [styles.memberActionCard, styles.memberActionCardPlan, pressed && styles.memberActionCardPressed]}><View style={[styles.memberActionIcon, styles.memberActionIconPlan]}><Text style={styles.memberActionIconText}>◆</Text></View><View style={styles.rowMain}><Text style={styles.memberActionTitle}>{editable ? 'Gestionar plan' : 'Asignar plan'}</Text><Text style={styles.memberActionCopy}>{editable ? 'Cambiar plan o estado de la membresía' : 'Crear una nueva membresía para este miembro'}</Text></View><Text style={styles.memberActionChevron}>›</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel="Eliminar miembro" onPress={onDelete} style={({pressed}) => [styles.memberActionCard, styles.memberActionCardDelete, pressed && styles.memberActionCardPressed]}><View style={[styles.memberActionIcon, styles.memberActionIconDelete]}><Text style={[styles.memberActionIconText, styles.memberActionDeleteText]}>×</Text></View><View style={styles.rowMain}><Text style={[styles.memberActionTitle, styles.memberActionDeleteText]}>Eliminar miembro</Text><Text style={styles.memberActionCopy}>Elimina el registro o lo archiva si tiene historial</Text></View></Pressable></View></Sheet>;
+  const active = member ? activeMembership(member) : undefined;
+  const editable = member ? editableMembership(member) : undefined;
+  const membership = active ?? editable ?? member?.memberships[0];
+  const fullName = member ? `${member.firstName} ${member.lastName}` : 'Opciones del miembro';
+  return <Sheet open={!!member} title={fullName} onClose={onClose}><View style={styles.memberProfile}><View style={styles.memberProfileAvatar}><Text style={styles.memberProfileInitials}>{member ? `${member.firstName[0]}${member.lastName[0]}` : ''}</Text></View><View style={styles.rowMain}><Text style={styles.memberProfileName}>{fullName}</Text><Text style={styles.memberProfileMeta}>CI {member?.ci}{member?.phone ? ` · ${member.phone}` : ''}</Text><Text style={styles.memberProfilePlan}>{membership ? `${membership.plan.name} · ${membershipStatusLabel(membership.status)}` : 'Sin membresía vigente'}</Text>{active ? <Text style={styles.memberProfileExpiry}>Vence el {formatDate(active.endDate)} · {remainingDaysLabel(active.endDate)}</Text> : null}</View></View><View style={styles.memberActionGrid}><Pressable accessibilityRole="button" onPress={onEdit} style={({pressed}) => [styles.memberActionCard, pressed && styles.memberActionCardPressed]}><View style={styles.memberActionIcon}><Text style={styles.memberActionIconText}>✎</Text></View><View style={styles.rowMain}><Text style={styles.memberActionTitle}>Editar datos</Text><Text style={styles.memberActionCopy}>Nombre, CI, teléfono, dirección y estado</Text></View><Text style={styles.memberActionChevron}>›</Text></Pressable><Pressable accessibilityRole="button" onPress={onPlan} style={({pressed}) => [styles.memberActionCard, styles.memberActionCardPlan, pressed && styles.memberActionCardPressed]}><View style={[styles.memberActionIcon, styles.memberActionIconPlan]}><Text style={styles.memberActionIconText}>◆</Text></View><View style={styles.rowMain}><Text style={styles.memberActionTitle}>{editable ? 'Gestionar plan' : 'Asignar plan'}</Text><Text style={styles.memberActionCopy}>{editable ? 'Cambiar plan o estado de la membresía' : 'Crear una nueva membresía para este miembro'}</Text></View><Text style={styles.memberActionChevron}>›</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel="Eliminar miembro" onPress={onDelete} style={({pressed}) => [styles.memberActionCard, styles.memberActionCardDelete, pressed && styles.memberActionCardPressed]}><View style={[styles.memberActionIcon, styles.memberActionIconDelete]}><Text style={[styles.memberActionIconText, styles.memberActionDeleteText]}>×</Text></View><View style={styles.rowMain}><Text style={[styles.memberActionTitle, styles.memberActionDeleteText]}>Eliminar miembro</Text><Text style={styles.memberActionCopy}>Elimina el registro o lo archiva si tiene historial</Text></View></Pressable></View></Sheet>;
 }
 
 function PlansScreen({ scope, revision }: ScreenProps) {
@@ -137,7 +169,7 @@ function PlansScreen({ scope, revision }: ScreenProps) {
   const onlineAction = async (action: () => void) => { if (!await hasInternetConnection()) { showOnlineRequired(); return; } action(); };
   const confirmDelete = (plan: Plan) => { void onlineAction(() => Alert.alert('Eliminar plan', `¿Deseas eliminar el plan ${plan.name}? No podrá eliminarse si tiene membresías activas.`, [{ text:'Cancelar', style:'cancel' }, { text:'Eliminar', style:'destructive', onPress:() => { void api.deletePlan(plan.id).then(() => syncNow(scope)).then(() => { setSelected(null); load(); }).catch(showError); } }])); };
   useEffect(load, [load, revision]);
-  return <><ScrollView refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} />} contentContainerStyle={styles.scroll}>
+  return <><ScrollView refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} colors={[activeDarkTheme ? '#c9f47b' : '#1d6b4d']} tintColor={activeDarkTheme ? '#c9f47b' : '#1d6b4d'} progressBackgroundColor={activeDarkTheme ? '#212923' : '#fff'} />} contentContainerStyle={styles.scroll}>
     <PrimaryButton label="+ Crear plan" onPress={() => { void onlineAction(() => setOpen(true)); }} />
     <SectionTitle title="Planes del gimnasio" subtitle="Crear, editar y eliminar requieren conexión" />
     {plans.map(plan => <Pressable accessibilityRole="button" onPress={() => setSelected(plan)} key={plan.id} style={({pressed}) => [styles.planCard, pressed && styles.planCardPressed]}><View style={styles.rowMain}><View style={styles.planTitleLine}><Text style={styles.planName}>{plan.name}</Text><View style={[styles.planState, plan.isActive && styles.planStateActive]}><Text style={[styles.planStateText, plan.isActive && styles.planStateTextActive]}>{plan.isActive ? 'Activo' : 'Inactivo'}</Text></View></View><Text style={styles.rowSubtitle}>{plan.durationDays} días{plan.description ? ` · ${plan.description}` : ''}</Text></View><Text style={styles.planPrice}>{money(plan.price)}</Text><Text style={styles.memberChevron}>›</Text></Pressable>)}
@@ -150,10 +182,11 @@ function PaymentsScreen({ scope, revision }: ScreenProps) {
   const refresh = useCallback(() => { void syncNow(scope).then(load); }, [scope, load]);
   useEffect(load, [load, revision]);
   const debt = payments.reduce((sum, payment) => payment.status === 'CANCELLED' ? sum : sum + Math.max(0, Number(payment.amount) - Number(payment.paidAmount)), 0);
-  return <><ScrollView refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} />} contentContainerStyle={styles.scroll}>
-    <View style={styles.debtCard}><Text style={styles.heroLabel}>TOTAL POR COBRAR</Text><Text style={styles.debtValue}>{money(debt)}</Text></View>
+  const pendingCount = payments.filter(payment => payment.status !== 'CANCELLED' && Number(payment.amount) > Number(payment.paidAmount)).length;
+  return <><ScrollView refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} colors={[activeDarkTheme ? '#c9f47b' : '#1d6b4d']} tintColor={activeDarkTheme ? '#c9f47b' : '#1d6b4d'} progressBackgroundColor={activeDarkTheme ? '#212923' : '#fff'} />} contentContainerStyle={styles.scroll}>
+    <View style={[styles.debtCard,styles.debtCardGreen]}><View style={[styles.debtGlowLarge,styles.debtGlowLargeGreen]}/><View style={styles.debtGlowSmall}/><View style={styles.debtHeader}><View style={[styles.debtIcon,styles.debtIconGreen]}><Text style={styles.debtIconText}>$</Text></View><View style={styles.rowMain}><Text style={[styles.debtLabel,styles.debtLabelGreen]}>TOTAL POR COBRAR</Text><Text style={[styles.debtSubtitle,styles.debtSubtitleGreen]}>Saldo pendiente acumulado</Text></View></View><Text style={[styles.debtValue,styles.debtValueGreen]}>{money(debt)}</Text><View style={[styles.debtFooter,styles.debtFooterGreen]}><Text style={[styles.debtPending,styles.debtPendingGreen]}>{pendingCount} cobro{pendingCount === 1 ? '' : 's'} pendiente{pendingCount === 1 ? '' : 's'}</Text><View style={[styles.debtState,styles.debtStateGreen]}><View style={[styles.debtStateDot,styles.debtStateDotGreen]}/><Text style={[styles.debtStateText,styles.debtStateTextGreen]}>Por gestionar</Text></View></View></View>
     <SectionTitle title="Cobros" subtitle="Registra abonos parciales o pagos completos" />
-    <View style={styles.card}>{payments.map(payment => {
+    <View style={styles.paymentList}>{payments.map(payment => {
       const total = Number(payment.amount);
       const paid = Math.min(total, Math.max(0, Number(payment.paidAmount)));
       const balance = Math.max(0, total - paid);
@@ -164,17 +197,19 @@ function PaymentsScreen({ scope, revision }: ScreenProps) {
         <View style={styles.paymentDetailHead}><View style={styles.rowMain}><Text style={styles.rowTitle}>{payment.member.firstName} {payment.member.lastName}</Text><Text style={styles.rowSubtitle}>{payment.membership.plan.name}</Text></View><View style={[styles.paymentBadge, status.tone === 'success' && styles.paymentBadgeSuccess, status.tone === 'danger' && styles.paymentBadgeDanger]}><Text style={[styles.paymentBadgeText, status.tone === 'success' && styles.paymentBadgeTextSuccess, status.tone === 'danger' && styles.paymentBadgeTextDanger]}>{status.label}</Text></View></View>
         <View style={styles.paymentAmounts}><View><Text style={styles.paymentAmountLabel}>PAGADO</Text><Text style={styles.paymentPaid}>{money(paid)}</Text></View><View><Text style={[styles.paymentAmountLabel, styles.paymentAmountRight]}>TOTAL</Text><Text style={styles.paymentTotal}>{money(total)}</Text></View></View>
         <View style={styles.paymentProgress}><View style={[styles.paymentProgressFill, { width: `${progress}%` }]} /></View>
+        {payment.movements.length ? <View style={styles.paymentOperations}><Text style={styles.paymentOperationsTitle}>OPERACIONES</Text>{payment.movements.map(movement => <View key={movement.id} style={styles.paymentOperation}><Text style={styles.paymentOperationAmount}>Abono {money(movement.amount)}</Text><Text style={styles.paymentOperationDate}>{formatDateTime(movement.occurredAt)}</Text></View>)}</View> : <Text style={styles.paymentNoOperations}>Sin operaciones registradas</Text>}
         {!disabled ? <Text style={styles.paymentBalanceCopy}>Saldo pendiente: {money(balance)} · Toca para cobrar</Text> : null}
       </Pressable>;
-    })}</View>
+    })}{!payments.length && <View style={styles.card}><Empty text="No hay cobros registrados" /></View>}</View>
   </ScrollView><PaymentForm scope={scope} payment={selected} onClose={() => setSelected(null)} onSaved={() => { setSelected(null); load(); }} /></>;
 }
 
 function MemberForm({ scope, open, member, onClose, onSaved }: FormProps & { member: Member | null }) {
-  const [ci, setCi] = useState(''); const [firstName, setFirstName] = useState(''); const [lastName, setLastName] = useState(''); const [phone, setPhone] = useState(''); const [address, setAddress] = useState(''); const [status, setStatus] = useState('ACTIVE'); const [saving, setSaving] = useState(false);
-  useEffect(() => { if (!open) return; setCi(member?.ci ?? ''); setFirstName(member?.firstName ?? ''); setLastName(member?.lastName ?? ''); setPhone(member?.phone ?? ''); setAddress(member?.address ?? ''); setStatus(member?.status ?? 'ACTIVE'); }, [open, member]);
-  const save = async () => { setSaving(true); try { const input = { ci, firstName: firstName.trim(), lastName: lastName.trim(), phone: phone.trim(), address: address.trim(), status }; if (member) await offline.updateMember(scope, member.id, input); else await offline.createMember(scope, { ci, firstName: input.firstName, lastName: input.lastName, phone: input.phone }); onSaved(); } catch (error) { showError(error); } finally { setSaving(false); } };
-  return <Sheet open={open} title={member ? "Editar miembro" : "Nuevo miembro"} onClose={onClose}><Field label="Carnet de identidad (11 dígitos)" value={ci} onChangeText={(value) => setCi(value.replace(/\D/g, '').slice(0, 11))} keyboardType="number-pad" maxLength={11} /><Field label="Nombre" value={firstName} onChangeText={setFirstName} /><Field label="Apellidos" value={lastName} onChangeText={setLastName} /><Field label="Teléfono" value={phone} onChangeText={setPhone} keyboardType="phone-pad" />{member && <><Field label="Dirección" value={address} onChangeText={setAddress} /><Text style={styles.fieldLabel}>Estado</Text><View style={styles.statusChoices}><Pressable onPress={() => setStatus('ACTIVE')} style={[styles.statusChoice, status === 'ACTIVE' && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, status === 'ACTIVE' && styles.statusChoiceTextActive]}>Activo</Text></Pressable><Pressable onPress={() => setStatus('INACTIVE')} style={[styles.statusChoice, status === 'INACTIVE' && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, status === 'INACTIVE' && styles.statusChoiceTextActive]}>Inactivo</Text></Pressable></View></>}<PrimaryButton label={saving ? "Guardando…" : member ? "Guardar cambios" : "Guardar miembro"} onPress={() => void save()} disabled={saving || ci.length !== 11 || !firstName.trim() || !lastName.trim()} /></Sheet>;
+  const [ci, setCi] = useState(''); const [code, setCode] = useState(''); const [firstName, setFirstName] = useState(''); const [lastName, setLastName] = useState(''); const [age, setAge] = useState(''); const [sex, setSex] = useState<MemberSex | ''>(''); const [phone, setPhone] = useState(''); const [address, setAddress] = useState(''); const [status, setStatus] = useState('ACTIVE'); const [saving, setSaving] = useState(false);
+  useEffect(() => { if (!open) return; setCi(member?.ci ?? ''); setCode(member?.code ?? ''); setFirstName(member?.firstName ?? ''); setLastName(member?.lastName ?? ''); setAge(member?.age ? String(member.age) : ''); setSex(member?.sex ?? ''); setPhone(member?.phone ?? ''); setAddress(member?.address ?? ''); setStatus(member?.status ?? 'ACTIVE'); }, [open, member]);
+  const save = async () => { setSaving(true); try { const input = { ci, code: code.trim() || null, firstName: firstName.trim(), lastName: lastName.trim(), age: age ? Number(age) : null, sex: sex || null, phone: phone.trim(), address: address.trim() }; if (member) await offline.updateMember(scope, member.id, { ...input, status }); else await offline.createMember(scope, input); onSaved(); } catch (error) { showError(error); } finally { setSaving(false); } };
+  const validAge = !age || (Number.isInteger(Number(age)) && Number(age) >= 1 && Number(age) <= 120);
+  return <Sheet open={open} title={member ? "Editar miembro" : "Nuevo miembro"} onClose={onClose}><Field label="Nombre" value={firstName} onChangeText={setFirstName} /><Field label="Apellidos" value={lastName} onChangeText={setLastName} /><Field label="Carnet de identidad (11 dígitos)" value={ci} onChangeText={(value) => setCi(value.replace(/\D/g, '').slice(0, 11))} keyboardType="number-pad" maxLength={11} /><Field label="Código interno (opcional)" value={code} onChangeText={(value) => setCode(value.slice(0, 40))} maxLength={40} /><Field label="Edad (opcional)" value={age} onChangeText={(value) => setAge(value.replace(/\D/g, '').slice(0, 3))} keyboardType="number-pad" maxLength={3} /><Text style={styles.fieldLabel}>Sexo (opcional)</Text><View style={styles.statusChoices}>{([['MALE','Masculino'],['FEMALE','Femenino'],['OTHER','Otro']] as Array<[MemberSex,string]>).map(([value,label]) => <Pressable key={value} onPress={() => setSex(sex === value ? '' : value)} style={[styles.statusChoice, sex === value && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, sex === value && styles.statusChoiceTextActive]}>{label}</Text></Pressable>)}</View><Field label="Teléfono" value={phone} onChangeText={setPhone} keyboardType="phone-pad" /><Field label="Dirección" value={address} onChangeText={setAddress} />{member && <><Text style={styles.fieldLabel}>Estado</Text><View style={styles.statusChoices}><Pressable onPress={() => setStatus('ACTIVE')} style={[styles.statusChoice, status === 'ACTIVE' && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, status === 'ACTIVE' && styles.statusChoiceTextActive]}>Activo</Text></Pressable><Pressable onPress={() => setStatus('INACTIVE')} style={[styles.statusChoice, status === 'INACTIVE' && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, status === 'INACTIVE' && styles.statusChoiceTextActive]}>Inactivo</Text></Pressable></View></>}<PrimaryButton label={saving ? "Guardando…" : member ? "Guardar cambios" : "Guardar miembro"} onPress={() => void save()} disabled={saving || ci.length !== 11 || !firstName.trim() || !lastName.trim() || !validAge} /></Sheet>;
 }
 
 function PlanActions({ plan, onClose, onEdit, onDelete }: { plan: Plan | null; onClose: () => void; onEdit: () => void; onDelete: () => void }) {
@@ -185,7 +220,7 @@ function PlanForm({ scope, open, plan, onClose, onSaved }: FormProps & { plan: P
   const [name, setName] = useState(''); const [price, setPrice] = useState(''); const [days, setDays] = useState('30'); const [description, setDescription] = useState(''); const [isActive, setIsActive] = useState(true); const [saving, setSaving] = useState(false);
   useEffect(() => { if (!open) return; setName(plan?.name ?? ''); setPrice(plan?.price ? String(plan.price) : ''); setDays(plan ? String(plan.durationDays) : '30'); setDescription(plan?.description ?? ''); setIsActive(plan?.isActive ?? true); }, [open, plan]);
   const save = async () => { setSaving(true); try { if (!await hasInternetConnection()) { showOnlineRequired(); return; } const input={ name:name.trim(), price:Number(price), durationDays:Number(days), description:description.trim(), isActive }; if (plan) await api.updatePlan(plan.id, input); else await api.createPlan(input); await syncNow(scope); onSaved(); } catch(error) { showError(error); } finally { setSaving(false); } };
-  return <Sheet open={open} title={plan ? "Editar plan" : "Nuevo plan"} onClose={onClose}><Field label="Nombre del plan" value={name} onChangeText={setName} /><Field label="Precio en CUP" value={price} onChangeText={setPrice} keyboardType="numeric" /><Field label="Duración en días" value={days} onChangeText={setDays} keyboardType="numeric" />{plan && <><Field label="Descripción" value={description} onChangeText={setDescription} multiline /><Text style={styles.fieldLabel}>Disponibilidad</Text><View style={styles.statusChoices}><Pressable onPress={() => setIsActive(true)} style={[styles.statusChoice, isActive && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, isActive && styles.statusChoiceTextActive]}>Activo</Text></Pressable><Pressable onPress={() => setIsActive(false)} style={[styles.statusChoice, !isActive && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, !isActive && styles.statusChoiceTextActive]}>Inactivo</Text></Pressable></View></>}<PrimaryButton label={saving ? "Guardando…" : plan ? "Guardar cambios" : "Crear plan"} onPress={() => void save()} disabled={saving || !name.trim() || !price || Number(price) <= 0 || !days || Number(days) <= 0} /></Sheet>;
+  return <Sheet open={open} title={plan ? "Editar plan" : "Nuevo plan"} onClose={onClose}><Field label="Nombre del plan" value={name} onChangeText={setName} /><Field label={`Precio en ${activeCurrency}`} value={price} onChangeText={setPrice} keyboardType="numeric" /><Field label="Duración en días" value={days} onChangeText={setDays} keyboardType="numeric" />{plan && <><Field label="Descripción" value={description} onChangeText={setDescription} multiline /><Text style={styles.fieldLabel}>Disponibilidad</Text><View style={styles.statusChoices}><Pressable onPress={() => setIsActive(true)} style={[styles.statusChoice, isActive && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, isActive && styles.statusChoiceTextActive]}>Activo</Text></Pressable><Pressable onPress={() => setIsActive(false)} style={[styles.statusChoice, !isActive && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, !isActive && styles.statusChoiceTextActive]}>Inactivo</Text></Pressable></View></>}<PrimaryButton label={saving ? "Guardando…" : plan ? "Guardar cambios" : "Crear plan"} onPress={() => void save()} disabled={saving || !name.trim() || !price || Number(price) <= 0 || !days || Number(days) <= 0} /></Sheet>;
 }
 
 function AssignPlanForm({ scope, member, plans, onClose, onSaved }: { scope: string; member: Member | null; plans: Plan[]; onClose: () => void; onSaved: () => void }) {
@@ -258,7 +293,7 @@ function Sheet({ open, title, onClose, children }: { open: boolean; title: strin
     </View>
   </Modal>;
 }
-function Field(props: React.ComponentProps<typeof TextInput> & { label: string }) { const { label, ...input } = props; return <View style={styles.field}><Text style={styles.fieldLabel}>{label}</Text><TextInput placeholderTextColor="#9ca59f" style={styles.input} {...input} /></View>; }
+function Field(props: React.ComponentProps<typeof TextInput> & { label: string }) { const { label, ...input } = props; return <View style={styles.field}><Text style={styles.fieldLabel}>{label}</Text><TextInput placeholderTextColor={activeDarkTheme ? '#aab7b0' : '#657169'} style={styles.input} {...input} /></View>; }
 function PrimaryButton({ label, onPress, disabled }: { label: string; onPress: () => void; disabled?: boolean }) { return <Pressable onPress={onPress} disabled={disabled} style={[styles.primary, disabled && styles.disabled]}><Text style={styles.primaryText}>{label}</Text></Pressable>; }
 function Metric({ label, value, wide }: { label: string; value: string | number; wide?: boolean }) { return <View style={[styles.metric, wide && styles.metricWide]}><Text style={styles.metricLabel}>{label}</Text><Text style={styles.metricValue}>{value}</Text></View>; }
 function SectionTitle({ title, subtitle }: { title: string; subtitle: string }) { return <View style={styles.sectionTitle}><Text style={styles.sectionHeading}>{title}</Text><Text style={styles.sectionCopy}>{subtitle}</Text></View>; }
@@ -267,8 +302,13 @@ function Empty({ text }: { text: string }) { return <Text style={styles.empty}>{
 function showError(error: unknown) { Alert.alert('Atención', error instanceof Error ? error.message : 'Ocurrió un error'); }
 async function hasInternetConnection() { const state=await Network.getNetworkStateAsync().catch(() => null); return state?.isConnected === true && state.isInternetReachable !== false; }
 function showOnlineRequired() { Alert.alert('Conexión requerida', 'Debes conectarte a internet para crear, editar o eliminar planes.'); }
+function activeMembership(member: Member) { const now=Date.now(); return member.memberships.find(membership => membership.status === 'ACTIVE' && new Date(membership.endDate).getTime() >= now); }
 function editableMembership(member: Member) { const now=Date.now(); return member.memberships.find(membership => (membership.status === 'ACTIVE' && new Date(membership.endDate).getTime() >= now) || membership.status === 'SCHEDULED'); }
 function membershipStatusLabel(status: string) { return ({ ACTIVE:'Activa', SCHEDULED:'Programada', EXPIRED:'Vencida', CANCELLED:'Cancelada' } as Record<string,string>)[status] ?? status; }
+function sexLabel(sex?: MemberSex | null) { return sex ? ({ MALE:'Masculino', FEMALE:'Femenino', OTHER:'Otro' } as Record<MemberSex,string>)[sex] : ''; }
+function formatDate(value: string) { return new Date(value).toLocaleDateString('es-CU', { day:'2-digit', month:'short', year:'numeric' }); }
+function formatDateTime(value: string) { return new Date(value).toLocaleString('es-CU', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }); }
+function remainingDaysLabel(value: string) { const days=Math.max(0,Math.ceil((new Date(value).getTime()-Date.now())/86_400_000)); return `${days} día${days === 1 ? '' : 's'} restante${days === 1 ? '' : 's'}`; }
 function paymentDisplayStatus(payment: Payment, total: number, paid: number, balance: number) {
   if (payment.status === 'CANCELLED') return { label:'Cancelado', tone:'danger' } as const;
   if (total <= 0) return { label:'Sin importe', tone:'danger' } as const;
@@ -278,19 +318,184 @@ function paymentDisplayStatus(payment: Payment, total: number, paid: number, bal
   return { label:'Pendiente', tone:'warning' } as const;
 }
 
-const styles = StyleSheet.create({
-  center:{flex:1,alignItems:'center',justifyContent:'center',backgroundColor:'#173f31'}, app:{flex:1,backgroundColor:'#f5f5ef'}, content:{flex:1},
-  loginPage:{flex:1,backgroundColor:'#173f31',paddingHorizontal:24,paddingTop:70},logo:{width:64,height:64,borderRadius:18},loginBrand:{marginTop:16,color:'#fff',fontSize:22,fontWeight:'800'},mini:{color:'#c9f47b',fontSize:11,letterSpacing:2},loginTitle:{marginTop:44,color:'#fff',fontSize:34,fontWeight:'800',letterSpacing:-1.2},loginCopy:{marginTop:10,color:'#b8cec4',fontSize:15,lineHeight:22},loginCard:{marginTop:34,padding:20,borderRadius:20,backgroundColor:'#fff'},version:{marginTop:'auto',marginBottom:24,textAlign:'center',color:'#769387',fontSize:10,letterSpacing:2},
-  topbar:{paddingTop:18,paddingHorizontal:20,paddingBottom:14,flexDirection:'row',alignItems:'center',justifyContent:'space-between',backgroundColor:'#f5f5ef'},kicker:{color:'#397458',fontSize:9,fontWeight:'800',letterSpacing:1.5},screenTitle:{marginTop:3,fontSize:27,fontWeight:'800',color:'#17221d',letterSpacing:-.8},avatar:{width:39,height:39,borderRadius:20,alignItems:'center',justifyContent:'center',backgroundColor:'#c9f47b'},
-  syncBar:{minHeight:44,marginHorizontal:16,marginBottom:4,paddingHorizontal:12,flexDirection:'row',alignItems:'center',gap:9,borderRadius:12,backgroundColor:'#e5f2d1'},syncOffline:{backgroundColor:'#fff0d9'},syncError:{backgroundColor:'#ffe4df'},syncDot:{width:9,height:9,borderRadius:5,backgroundColor:'#e28d36'},syncDotOk:{backgroundColor:'#1d7b53'},syncMain:{flex:1},syncTitle:{color:'#24342c',fontSize:11,fontWeight:'800'},syncDetail:{marginTop:1,color:'#657169',fontSize:9},syncAction:{color:'#1d6b4d',fontSize:10,fontWeight:'800'},
-  accountScroll:{padding:16,paddingBottom:40},accountHero:{padding:26,alignItems:'center',borderRadius:22,backgroundColor:'#173f31'},accountHeroLabel:{color:'#a9c3b7',fontSize:9,fontWeight:'800',letterSpacing:1.3},accountHeroGym:{marginTop:8,color:'#fff',fontSize:23,fontWeight:'900',textAlign:'center'},accountCard:{marginTop:12,paddingHorizontal:17,borderWidth:1,borderColor:'#e2e7e3',borderRadius:17,backgroundColor:'#fff'},accountRow:{minHeight:61,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:18,borderBottomWidth:1,borderBottomColor:'#edf0ee'},accountRowLast:{borderBottomWidth:0},accountLabel:{color:'#7a857f',fontSize:10,fontWeight:'700'},accountValue:{flex:1,color:'#24342c',fontSize:12,fontWeight:'800',textAlign:'right'},logoutButton:{minHeight:69,marginTop:18,padding:13,flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:'#efcec9',borderRadius:15,backgroundColor:'#fff9f8'},logoutButtonPressed:{opacity:.7},logoutIcon:{width:42,height:42,marginRight:12,alignItems:'center',justifyContent:'center',borderRadius:13,backgroundColor:'#fee5e1'},logoutIconText:{color:'#a8453c',fontSize:20,fontWeight:'900'},logoutTitle:{color:'#a8453c',fontSize:13,fontWeight:'900'},logoutCopy:{marginTop:4,color:'#8b7774',fontSize:9},accountVersion:{marginTop:28,color:'#929b96',fontSize:9,letterSpacing:1.2,textAlign:'center'},
-  scroll:{padding:16,paddingBottom:35},hero:{padding:24,borderRadius:20,backgroundColor:'#173f31'},heroLabel:{color:'#a9c3b7',fontSize:10,fontWeight:'700',letterSpacing:1.3},heroValue:{marginTop:9,color:'#fff',fontSize:30,fontWeight:'800',letterSpacing:-1},heroHint:{marginTop:7,color:'#c9f47b',fontSize:11},metricGrid:{marginTop:12,flexDirection:'row',flexWrap:'wrap',gap:10},metric:{width:'48.3%',padding:17,borderWidth:1,borderColor:'#e2e7e3',borderRadius:15,backgroundColor:'#fff'},metricWide:{width:'100%'},metricLabel:{color:'#78827d',fontSize:11},metricValue:{marginTop:9,color:'#1c2b24',fontSize:21,fontWeight:'800'},
-  sectionTitle:{marginTop:26,marginBottom:10},sectionHeading:{fontSize:18,fontWeight:'800',color:'#17221d'},sectionCopy:{marginTop:3,color:'#7b8680',fontSize:11},card:{overflow:'hidden',borderWidth:1,borderColor:'#e2e7e3',borderRadius:16,backgroundColor:'#fff'},paymentRow:{minHeight:65,padding:14,flexDirection:'row',alignItems:'center',borderBottomWidth:1,borderBottomColor:'#edf0ee'},rowMain:{flex:1},rowTitle:{fontSize:13,fontWeight:'700',color:'#24342c'},rowSubtitle:{marginTop:4,color:'#7d8882',fontSize:10},income:{color:'#1d7b53',fontSize:12,fontWeight:'800'},empty:{padding:26,textAlign:'center',color:'#7d8882'},logoutHint:{marginTop:28,textAlign:'center',color:'#929b96',fontSize:10},
-  paymentDetailRow:{padding:15,borderBottomWidth:1,borderBottomColor:'#edf0ee'},paymentDetailRowPressed:{backgroundColor:'#f5f8f6'},paymentDetailHead:{flexDirection:'row',alignItems:'flex-start',gap:10},paymentBadge:{paddingVertical:4,paddingHorizontal:8,borderRadius:10,backgroundColor:'#fff0d8'},paymentBadgeSuccess:{backgroundColor:'#e1f4e8'},paymentBadgeDanger:{backgroundColor:'#fee6e2'},paymentBadgeText:{color:'#996018',fontSize:8,fontWeight:'900'},paymentBadgeTextSuccess:{color:'#1d754f'},paymentBadgeTextDanger:{color:'#a33f36'},paymentAmounts:{marginTop:14,flexDirection:'row',justifyContent:'space-between'},paymentAmountLabel:{color:'#8a958f',fontSize:8,fontWeight:'800',letterSpacing:.8},paymentAmountRight:{textAlign:'right'},paymentPaid:{marginTop:4,color:'#1d754f',fontSize:14,fontWeight:'900'},paymentTotal:{marginTop:4,color:'#27372f',fontSize:14,fontWeight:'900',textAlign:'right'},paymentProgress:{height:5,marginTop:12,overflow:'hidden',borderRadius:3,backgroundColor:'#e8ece9'},paymentProgressFill:{height:'100%',borderRadius:3,backgroundColor:'#58a878'},paymentBalanceCopy:{marginTop:8,color:'#7b6a42',fontSize:9,fontWeight:'700'},
-  memberSearch:{height:50,marginTop:14,paddingHorizontal:13,flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:'#dce3de',borderRadius:14,backgroundColor:'#fff'},memberSearchIcon:{marginRight:9,color:'#658071',fontSize:21},memberSearchInput:{height:'100%',flex:1,color:'#17221d',fontSize:12},memberSearchClear:{width:30,height:30,alignItems:'center',justifyContent:'center',borderRadius:10,backgroundColor:'#eef2ef'},memberSearchClearText:{color:'#68766e',fontSize:20,lineHeight:22},
-  primary:{minHeight:49,alignItems:'center',justifyContent:'center',borderRadius:12,backgroundColor:'#1d6b4d'},primaryText:{color:'#fff',fontSize:14,fontWeight:'800'},disabled:{opacity:.45},memberRow:{minHeight:80,padding:12,flexDirection:'row',alignItems:'center',borderBottomWidth:1,borderBottomColor:'#edf0ee'},memberRowPressed:{backgroundColor:'#f3f8f4'},memberAvatar:{width:44,height:44,marginRight:11,borderRadius:14,alignItems:'center',justifyContent:'center',backgroundColor:'#e5f2d1'},memberAvatarText:{color:'#31543f',fontSize:12,fontWeight:'900'},memberPlanLine:{marginTop:6,flexDirection:'row',alignItems:'center',gap:5},memberPlanDot:{width:6,height:6,borderRadius:3,backgroundColor:'#c0c7c3'},memberPlanDotActive:{backgroundColor:'#58a878'},memberPlanText:{color:'#69766f',fontSize:9},memberChevron:{marginLeft:8,color:'#93a098',fontSize:28,fontWeight:'300'},memberProfile:{marginBottom:20,padding:16,flexDirection:'row',alignItems:'center',borderRadius:16,backgroundColor:'#f3f7f3'},memberProfileAvatar:{width:52,height:52,marginRight:13,alignItems:'center',justifyContent:'center',borderRadius:17,backgroundColor:'#c9f47b'},memberProfileInitials:{color:'#244433',fontSize:15,fontWeight:'900'},memberProfileName:{color:'#17221d',fontSize:16,fontWeight:'900'},memberProfileMeta:{marginTop:4,color:'#748079',fontSize:10},memberProfilePlan:{marginTop:6,color:'#1d6b4d',fontSize:10,fontWeight:'700'},memberActionGrid:{gap:10},memberActionCard:{minHeight:76,padding:13,flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:'#dfe7e1',borderRadius:15,backgroundColor:'#fbfcfb'},memberActionCardPlan:{borderColor:'#dce8ca',backgroundColor:'#fbfdf7'},memberActionCardDelete:{minHeight:64,borderColor:'#f0d8d4',backgroundColor:'#fffafa'},memberActionCardPressed:{opacity:.72,transform:[{scale:.99}]},memberActionIcon:{width:43,height:43,marginRight:12,alignItems:'center',justifyContent:'center',borderRadius:13,backgroundColor:'#e6f1ea'},memberActionIconPlan:{backgroundColor:'#e8f5ce'},memberActionIconDelete:{backgroundColor:'#fee9e5'},memberActionIconText:{color:'#1d6b4d',fontSize:19,fontWeight:'900'},memberActionDeleteText:{color:'#a8453c'},memberActionTitle:{color:'#24342c',fontSize:13,fontWeight:'900'},memberActionCopy:{marginTop:4,color:'#7a867f',fontSize:9,lineHeight:13},memberActionChevron:{marginLeft:8,color:'#8e9a93',fontSize:25},planCard:{marginBottom:10,padding:18,flexDirection:'row',justifyContent:'space-between',alignItems:'center',borderWidth:1,borderColor:'#e2e7e3',borderRadius:16,backgroundColor:'#fff'},planName:{fontSize:15,fontWeight:'800',color:'#213129'},planPrice:{fontSize:15,fontWeight:'800',color:'#1d6b4d'},debtCard:{padding:22,borderRadius:18,backgroundColor:'#f0a866'},debtValue:{marginTop:8,fontSize:28,fontWeight:'900',color:'#48290f'},balance:{textAlign:'right',color:'#27372f',fontSize:12,fontWeight:'800'},balanceLabel:{marginTop:3,textAlign:'right',color:'#8b958f',fontSize:9},
-  modalRoot:{flex:1,justifyContent:'flex-end'},backdrop:{...StyleSheet.absoluteFillObject,backgroundColor:'#13251d99'},sheet:{maxHeight:'82%',paddingHorizontal:22,paddingBottom:32,borderTopLeftRadius:25,borderTopRightRadius:25,backgroundColor:'#fff',shadowColor:'#000',shadowOffset:{width:0,height:-8},shadowOpacity:.16,shadowRadius:20,elevation:18},sheetHandle:{width:42,height:4,marginTop:9,marginBottom:11,alignSelf:'center',borderRadius:2,backgroundColor:'#d9dfdb'},sheetHead:{marginBottom:18,flexDirection:'row',alignItems:'center',justifyContent:'space-between'},sheetTitle:{flex:1,fontSize:22,fontWeight:'800',color:'#17221d'},closeButton:{width:38,height:38,marginLeft:12,alignItems:'center',justifyContent:'center',borderRadius:12,backgroundColor:'#f1f4f2'},closeButtonPressed:{opacity:.65,transform:[{scale:.94}]},close:{marginTop:-2,fontSize:28,lineHeight:30,color:'#66736c'},field:{marginBottom:14},fieldLabel:{marginBottom:7,color:'#536159',fontSize:11,fontWeight:'700'},input:{height:48,paddingHorizontal:14,borderWidth:1,borderColor:'#dce2de',borderRadius:11,color:'#17221d',backgroundColor:'#fafbf9'},sheetCopy:{marginBottom:18,color:'#657169',fontSize:13},bold:{fontWeight:'800',color:'#17221d'},choices:{marginBottom:15,gap:8},choice:{padding:13,borderWidth:1,borderColor:'#dfe4e1',borderRadius:12},choiceActive:{borderColor:'#1d6b4d',backgroundColor:'#eef7e1'},choiceTitle:{fontWeight:'800',color:'#23332b'},choicePrice:{marginTop:3,color:'#728078',fontSize:11},statusChoices:{marginBottom:18,flexDirection:'row',gap:8},statusChoice:{flex:1,padding:11,alignItems:'center',borderWidth:1,borderColor:'#dfe4e1',borderRadius:10},statusChoiceActive:{borderColor:'#1d6b4d',backgroundColor:'#eef7e1'},statusChoiceText:{color:'#728078',fontSize:11,fontWeight:'700'},statusChoiceTextActive:{color:'#1d6b4d'},
-  planCardPressed:{opacity:.72,transform:[{scale:.99}]},planTitleLine:{flexDirection:'row',alignItems:'center',gap:7},planState:{paddingVertical:3,paddingHorizontal:7,borderRadius:8,backgroundColor:'#f1e8df'},planStateActive:{backgroundColor:'#e4f3e9'},planStateText:{color:'#94643a',fontSize:8,fontWeight:'800'},planStateTextActive:{color:'#277453'},planProfile:{marginBottom:20,padding:16,flexDirection:'row',alignItems:'center',borderRadius:16,backgroundColor:'#f6f9f2'},planProfileIcon:{width:52,height:52,marginRight:13,alignItems:'center',justifyContent:'center',borderRadius:17,backgroundColor:'#e8f5ce'},planProfileIconText:{color:'#1d6b4d',fontSize:20,fontWeight:'900'},planProfileState:{marginTop:6,color:'#277453',fontSize:10,fontWeight:'700'},planProfileStateInactive:{color:'#94643a'},
-  issueCard:{marginBottom:10,padding:14,borderWidth:1,borderColor:'#ead7d2',borderRadius:13,backgroundColor:'#fff8f6'},issueTitle:{color:'#24342c',fontSize:13,fontWeight:'800'},issueDate:{marginTop:3,color:'#7d8882',fontSize:9},issueError:{marginTop:9,color:'#8a3f31',fontSize:11,lineHeight:16},discard:{marginTop:12,color:'#1d6b4d',fontSize:11,fontWeight:'800'},
-  tabbar:{paddingTop:8,paddingBottom:10,flexDirection:'row',borderTopWidth:1,borderTopColor:'#dfe4e1',backgroundColor:'#fff'},tab:{flex:1,alignItems:'center'},tabIcon:{color:'#929b96',fontSize:18,fontWeight:'700'},tabLabel:{marginTop:2,color:'#929b96',fontSize:8,fontWeight:'700'},tabActive:{color:'#1d6b4d'},
+const palette = {
+  ink:'#17221d', brand:'#173f31', action:'#1d6b4d', accent:'#c9f47b', background:'#f5f5ef',
+  secondary:'#657169', warning:'#e28d36', danger:'#a8453c', white:'#fff', line:'#dfe4e1',
+} as const;
+
+const baseStyles = StyleSheet.create({
+  center:{flex:1,alignItems:'center',justifyContent:'center',backgroundColor:palette.brand}, app:{flex:1,backgroundColor:palette.background}, content:{flex:1},
+  loginPage:{flex:1,backgroundColor:palette.brand,paddingHorizontal:24,paddingTop:70},logo:{width:64,height:64,borderRadius:18},loginBrand:{marginTop:16,color:palette.white,fontSize:22,fontWeight:'800'},mini:{color:palette.accent,fontSize:11,letterSpacing:2},loginTitle:{marginTop:44,color:palette.white,fontSize:34,fontWeight:'800',letterSpacing:-1.2},loginCopy:{marginTop:10,color:'#c4d5cd',fontSize:15,lineHeight:22},loginCard:{marginTop:34,padding:20,borderRadius:20,backgroundColor:palette.white},version:{marginTop:'auto',marginBottom:24,textAlign:'center',color:'#a9c3b7',fontSize:10,letterSpacing:2},
+  topbar:{paddingTop:18,paddingHorizontal:20,paddingBottom:14,flexDirection:'row',alignItems:'center',justifyContent:'space-between',backgroundColor:palette.background},kicker:{color:palette.action,fontSize:9,fontWeight:'800',letterSpacing:1.5},screenTitle:{marginTop:3,fontSize:27,fontWeight:'800',color:palette.ink,letterSpacing:-.8},avatar:{width:39,height:39,borderRadius:20,alignItems:'center',justifyContent:'center',backgroundColor:palette.accent},
+  syncBar:{minHeight:44,marginHorizontal:16,marginBottom:4,paddingHorizontal:12,flexDirection:'row',alignItems:'center',gap:9,borderRadius:12,backgroundColor:'#e8f5ce'},syncOffline:{backgroundColor:'#fff4e8'},syncError:{backgroundColor:'#fee9e5'},syncDot:{width:9,height:9,borderRadius:5,backgroundColor:palette.warning},syncDotOk:{backgroundColor:palette.action},syncMain:{flex:1},syncTitle:{color:palette.ink,fontSize:11,fontWeight:'800'},syncDetail:{marginTop:1,color:palette.secondary,fontSize:9},syncAction:{color:palette.action,fontSize:10,fontWeight:'800'},
+  accountScroll:{padding:16,paddingBottom:40},accountHero:{padding:26,alignItems:'center',borderRadius:22,backgroundColor:palette.brand},accountHeroLabel:{color:'#c4d5cd',fontSize:9,fontWeight:'800',letterSpacing:1.3},accountHeroGym:{marginTop:8,color:palette.white,fontSize:23,fontWeight:'900',textAlign:'center'},accountCard:{marginTop:12,paddingHorizontal:17,borderWidth:1,borderColor:palette.line,borderRadius:17,backgroundColor:palette.white},accountRow:{minHeight:61,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:18,borderBottomWidth:1,borderBottomColor:'#edf0ee'},accountRowLast:{borderBottomWidth:0},accountLabel:{color:palette.secondary,fontSize:10,fontWeight:'700'},accountValue:{flex:1,color:palette.ink,fontSize:12,fontWeight:'800',textAlign:'right'},logoutButton:{minHeight:69,marginTop:18,padding:13,flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:'#efcec9',borderRadius:15,backgroundColor:'#fff9f8'},logoutButtonPressed:{opacity:.7},logoutIcon:{width:42,height:42,marginRight:12,alignItems:'center',justifyContent:'center',borderRadius:13,backgroundColor:'#fee5e1'},logoutIconText:{color:palette.danger,fontSize:20,fontWeight:'900'},logoutTitle:{color:palette.danger,fontSize:13,fontWeight:'900'},logoutCopy:{marginTop:4,color:palette.secondary,fontSize:9},accountVersion:{marginTop:28,color:palette.secondary,fontSize:9,letterSpacing:1.2,textAlign:'center'},
+  themeCard:{marginTop:14,padding:17,borderWidth:1,borderColor:palette.line,borderRadius:17,backgroundColor:palette.white},themeTitle:{color:palette.ink,fontSize:15,fontWeight:'900'},themeCopy:{marginTop:4,color:palette.secondary,fontSize:10,lineHeight:14},themeOptions:{marginTop:14,gap:8},themeOption:{minHeight:57,paddingHorizontal:13,flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:palette.line,borderRadius:12,backgroundColor:'#fbfcfb'},themeOptionActive:{borderColor:palette.action,backgroundColor:'#eef7e1'},themeOptionPressed:{opacity:.76},themeOptionTitle:{color:palette.ink,fontSize:12,fontWeight:'800'},themeOptionTitleActive:{color:palette.action},themeOptionCopy:{marginTop:3,color:palette.secondary,fontSize:9},themeRadio:{width:19,height:19,marginLeft:12,alignItems:'center',justifyContent:'center',borderWidth:2,borderColor:'#9aa69f',borderRadius:10},themeRadioActive:{borderColor:palette.action},themeRadioDot:{width:9,height:9,borderRadius:5,backgroundColor:palette.action},
+  scroll:{padding:16,paddingBottom:35},hero:{padding:24,borderRadius:20,backgroundColor:palette.brand},heroLabel:{color:'#c4d5cd',fontSize:10,fontWeight:'700',letterSpacing:1.3},heroValue:{marginTop:9,color:palette.white,fontSize:30,fontWeight:'800',letterSpacing:-1},heroHint:{marginTop:7,color:palette.accent,fontSize:11},metricGrid:{marginTop:12,flexDirection:'row',flexWrap:'wrap',gap:10},metric:{width:'48.3%',padding:17,borderWidth:1,borderColor:palette.line,borderRadius:15,backgroundColor:palette.white},metricWide:{width:'100%'},metricLabel:{color:palette.secondary,fontSize:11},metricValue:{marginTop:9,color:palette.ink,fontSize:21,fontWeight:'800'},
+  sectionTitle:{marginTop:26,marginBottom:10},sectionHeading:{fontSize:18,fontWeight:'800',color:palette.ink},sectionCopy:{marginTop:3,color:palette.secondary,fontSize:11},card:{overflow:'hidden',borderWidth:1,borderColor:palette.line,borderRadius:16,backgroundColor:palette.white},paymentRow:{minHeight:65,padding:14,flexDirection:'row',alignItems:'center',borderBottomWidth:1,borderBottomColor:'#edf0ee'},rowMain:{flex:1},rowTitle:{fontSize:13,fontWeight:'700',color:palette.ink},rowSubtitle:{marginTop:4,color:palette.secondary,fontSize:10},income:{color:palette.action,fontSize:12,fontWeight:'800'},empty:{padding:26,textAlign:'center',color:palette.secondary},logoutHint:{marginTop:28,textAlign:'center',color:palette.secondary,fontSize:10},
+  paymentList:{gap:12},paymentDetailRow:{padding:16,borderWidth:1,borderColor:palette.line,borderRadius:16,backgroundColor:palette.white,shadowColor:palette.brand,shadowOffset:{width:0,height:3},shadowOpacity:.06,shadowRadius:8,elevation:2},paymentDetailRowPressed:{borderColor:'#b9cfbf',backgroundColor:'#f5f8f6'},paymentDetailHead:{flexDirection:'row',alignItems:'flex-start',gap:10},paymentBadge:{paddingVertical:4,paddingHorizontal:8,borderRadius:10,backgroundColor:'#fff0d8'},paymentBadgeSuccess:{backgroundColor:'#e1f4e8'},paymentBadgeDanger:{backgroundColor:'#fee6e2'},paymentBadgeText:{color:'#996018',fontSize:8,fontWeight:'900'},paymentBadgeTextSuccess:{color:palette.action},paymentBadgeTextDanger:{color:palette.danger},paymentAmounts:{marginTop:14,flexDirection:'row',justifyContent:'space-between'},paymentAmountLabel:{color:palette.secondary,fontSize:8,fontWeight:'800',letterSpacing:.8},paymentAmountRight:{textAlign:'right'},paymentPaid:{marginTop:4,color:palette.action,fontSize:14,fontWeight:'900'},paymentTotal:{marginTop:4,color:palette.ink,fontSize:14,fontWeight:'900',textAlign:'right'},paymentProgress:{height:5,marginTop:12,overflow:'hidden',borderRadius:3,backgroundColor:'#e8ece9'},paymentProgressFill:{height:'100%',borderRadius:3,backgroundColor:palette.action},paymentOperations:{marginTop:13,paddingTop:10,borderTopWidth:1,borderTopColor:'#edf0ee'},paymentOperationsTitle:{marginBottom:3,color:palette.secondary,fontSize:8,fontWeight:'900',letterSpacing:.8},paymentOperation:{paddingVertical:5,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:12},paymentOperationAmount:{color:palette.action,fontSize:10,fontWeight:'800'},paymentOperationDate:{color:palette.secondary,fontSize:9},paymentNoOperations:{marginTop:11,color:palette.secondary,fontSize:9},paymentBalanceCopy:{marginTop:8,color:palette.warning,fontSize:9,fontWeight:'800'},
+  memberSearch:{height:50,marginTop:14,paddingHorizontal:13,flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:palette.line,borderRadius:14,backgroundColor:palette.white},memberSearchIcon:{marginRight:9,color:palette.action,fontSize:21},memberSearchInput:{height:'100%',flex:1,color:palette.ink,fontSize:12},memberSearchClear:{width:30,height:30,alignItems:'center',justifyContent:'center',borderRadius:10,backgroundColor:'#eef2ef'},memberSearchClearText:{color:palette.secondary,fontSize:20,lineHeight:22},
+  primary:{minHeight:49,alignItems:'center',justifyContent:'center',borderRadius:12,backgroundColor:palette.action},primaryText:{color:palette.white,fontSize:14,fontWeight:'800'},disabled:{opacity:.45},memberRow:{minHeight:80,padding:12,flexDirection:'row',alignItems:'center',borderBottomWidth:1,borderBottomColor:'#edf0ee'},memberRowPressed:{backgroundColor:'#f3f8f4'},memberAvatar:{width:44,height:44,marginRight:11,borderRadius:14,alignItems:'center',justifyContent:'center',backgroundColor:'#e8f5ce'},memberAvatarText:{color:palette.brand,fontSize:12,fontWeight:'900'},memberPlanLine:{marginTop:6,flexDirection:'row',alignItems:'center',gap:5},memberPlanDot:{width:6,height:6,borderRadius:3,backgroundColor:'#c0c7c3'},memberPlanDotActive:{backgroundColor:palette.action},memberPlanText:{color:palette.secondary,fontSize:9},memberChevron:{marginLeft:8,color:palette.secondary,fontSize:28,fontWeight:'300'},memberProfile:{marginBottom:20,padding:16,flexDirection:'row',alignItems:'center',borderRadius:16,backgroundColor:'#f3f7f3'},memberProfileAvatar:{width:52,height:52,marginRight:13,alignItems:'center',justifyContent:'center',borderRadius:17,backgroundColor:palette.accent},memberProfileInitials:{color:palette.brand,fontSize:15,fontWeight:'900'},memberProfileName:{color:palette.ink,fontSize:16,fontWeight:'900'},memberProfileMeta:{marginTop:4,color:palette.secondary,fontSize:10},memberProfilePlan:{marginTop:6,color:palette.action,fontSize:10,fontWeight:'700'},memberProfileExpiry:{marginTop:4,color:palette.secondary,fontSize:9,fontWeight:'700'},memberActionGrid:{gap:10},memberActionCard:{minHeight:76,padding:13,flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:palette.line,borderRadius:15,backgroundColor:'#fbfcfb'},memberActionCardPlan:{borderColor:'#dce8ca',backgroundColor:'#fbfdf7'},memberActionCardDelete:{minHeight:64,borderColor:'#f0d8d4',backgroundColor:'#fffafa'},memberActionCardPressed:{opacity:.72,transform:[{scale:.99}]},memberActionIcon:{width:43,height:43,marginRight:12,alignItems:'center',justifyContent:'center',borderRadius:13,backgroundColor:'#e6f1ea'},memberActionIconPlan:{backgroundColor:'#e8f5ce'},memberActionIconDelete:{backgroundColor:'#fee9e5'},memberActionIconText:{color:palette.action,fontSize:19,fontWeight:'900'},memberActionDeleteText:{color:palette.danger},memberActionTitle:{color:palette.ink,fontSize:13,fontWeight:'900'},memberActionCopy:{marginTop:4,color:palette.secondary,fontSize:9,lineHeight:13},memberActionChevron:{marginLeft:8,color:palette.secondary,fontSize:25},planCard:{marginBottom:10,padding:18,flexDirection:'row',justifyContent:'space-between',alignItems:'center',borderWidth:1,borderColor:palette.line,borderRadius:16,backgroundColor:palette.white},planName:{fontSize:15,fontWeight:'800',color:palette.ink},planPrice:{fontSize:15,fontWeight:'800',color:palette.action},debtCard:{position:'relative',overflow:'hidden',padding:22,borderWidth:1,borderColor:'#f1d2b2',borderRadius:22,backgroundColor:'#fff7ed',shadowColor:palette.warning,shadowOffset:{width:0,height:5},shadowOpacity:.1,shadowRadius:12,elevation:3},debtGlowLarge:{position:'absolute',right:-42,top:-58,width:150,height:150,borderRadius:75,backgroundColor:'#e28d3630'},debtGlowSmall:{position:'absolute',right:58,bottom:-37,width:76,height:76,borderRadius:38,backgroundColor:'#c9f47b45'},debtHeader:{flexDirection:'row',alignItems:'center'},debtIcon:{width:42,height:42,marginRight:12,alignItems:'center',justifyContent:'center',borderRadius:13,backgroundColor:palette.brand},debtIconText:{color:palette.accent,fontSize:18,fontWeight:'900'},debtLabel:{color:palette.warning,fontSize:9,fontWeight:'900',letterSpacing:1.2},debtSubtitle:{marginTop:3,color:palette.secondary,fontSize:10},debtValue:{marginTop:18,color:palette.ink,fontSize:32,fontWeight:'900',letterSpacing:-.8},debtFooter:{marginTop:18,paddingTop:13,flexDirection:'row',alignItems:'center',justifyContent:'space-between',borderTopWidth:1,borderTopColor:'#f1d2b2'},debtPending:{color:palette.ink,fontSize:10,fontWeight:'800'},debtState:{paddingVertical:5,paddingHorizontal:8,flexDirection:'row',alignItems:'center',gap:5,borderRadius:10,backgroundColor:palette.white},debtStateDot:{width:6,height:6,borderRadius:3,backgroundColor:palette.warning},debtStateText:{color:palette.warning,fontSize:8,fontWeight:'900'},balance:{textAlign:'right',color:palette.ink,fontSize:12,fontWeight:'800'},balanceLabel:{marginTop:3,textAlign:'right',color:palette.secondary,fontSize:9},
+  debtCardGreen:{borderColor:'#2d624d',backgroundColor:palette.brand,shadowColor:palette.brand},debtGlowLargeGreen:{backgroundColor:'#2d765855'},debtIconGreen:{backgroundColor:'#ffffff18'},debtLabelGreen:{color:palette.accent},debtSubtitleGreen:{color:'#c4d5cd'},debtValueGreen:{color:palette.white},debtFooterGreen:{borderTopColor:'#ffffff26'},debtPendingGreen:{color:'#e7f0eb'},debtStateGreen:{backgroundColor:'#ffffff14'},debtStateDotGreen:{backgroundColor:palette.accent},debtStateTextGreen:{color:palette.accent},
+  modalRoot:{flex:1,justifyContent:'flex-end'},backdrop:{...StyleSheet.absoluteFillObject,backgroundColor:'#13251d99'},sheet:{maxHeight:'82%',paddingHorizontal:22,paddingBottom:32,borderTopLeftRadius:25,borderTopRightRadius:25,backgroundColor:palette.white,shadowColor:'#000',shadowOffset:{width:0,height:-8},shadowOpacity:.16,shadowRadius:20,elevation:18},sheetHandle:{width:42,height:4,marginTop:9,marginBottom:11,alignSelf:'center',borderRadius:2,backgroundColor:'#d9dfdb'},sheetHead:{marginBottom:18,flexDirection:'row',alignItems:'center',justifyContent:'space-between'},sheetTitle:{flex:1,fontSize:22,fontWeight:'800',color:palette.ink},closeButton:{width:38,height:38,marginLeft:12,alignItems:'center',justifyContent:'center',borderRadius:12,backgroundColor:'#f1f4f2'},closeButtonPressed:{opacity:.65,transform:[{scale:.94}]},close:{marginTop:-2,fontSize:28,lineHeight:30,color:palette.secondary},field:{marginBottom:14},fieldLabel:{marginBottom:7,color:palette.secondary,fontSize:11,fontWeight:'700'},input:{height:48,paddingHorizontal:14,borderWidth:1,borderColor:palette.line,borderRadius:11,color:palette.ink,backgroundColor:'#fafbf9'},sheetCopy:{marginBottom:18,color:palette.secondary,fontSize:13},bold:{fontWeight:'800',color:palette.ink},choices:{marginBottom:15,gap:8},choice:{padding:13,borderWidth:1,borderColor:palette.line,borderRadius:12},choiceActive:{borderColor:palette.action,backgroundColor:'#eef7e1'},choiceTitle:{fontWeight:'800',color:palette.ink},choicePrice:{marginTop:3,color:palette.secondary,fontSize:11},statusChoices:{marginBottom:18,flexDirection:'row',gap:8},statusChoice:{flex:1,padding:11,alignItems:'center',borderWidth:1,borderColor:palette.line,borderRadius:10},statusChoiceActive:{borderColor:palette.action,backgroundColor:'#eef7e1'},statusChoiceText:{color:palette.secondary,fontSize:11,fontWeight:'700'},statusChoiceTextActive:{color:palette.action},
+  planCardPressed:{opacity:.72,transform:[{scale:.99}]},planTitleLine:{flexDirection:'row',alignItems:'center',gap:7},planState:{paddingVertical:3,paddingHorizontal:7,borderRadius:8,backgroundColor:'#fff0d8'},planStateActive:{backgroundColor:'#e1f4e8'},planStateText:{color:palette.warning,fontSize:8,fontWeight:'800'},planStateTextActive:{color:palette.action},planProfile:{marginBottom:20,padding:16,flexDirection:'row',alignItems:'center',borderRadius:16,backgroundColor:'#f6f9f2'},planProfileIcon:{width:52,height:52,marginRight:13,alignItems:'center',justifyContent:'center',borderRadius:17,backgroundColor:'#e8f5ce'},planProfileIconText:{color:palette.action,fontSize:20,fontWeight:'900'},planProfileState:{marginTop:6,color:palette.action,fontSize:10,fontWeight:'700'},planProfileStateInactive:{color:palette.warning},
+  issueCard:{marginBottom:10,padding:14,borderWidth:1,borderColor:'#ead7d2',borderRadius:13,backgroundColor:'#fff8f6'},issueTitle:{color:palette.ink,fontSize:13,fontWeight:'800'},issueDate:{marginTop:3,color:palette.secondary,fontSize:9},issueError:{marginTop:9,color:palette.danger,fontSize:11,lineHeight:16},discard:{marginTop:12,color:palette.action,fontSize:11,fontWeight:'800'},
+  tabbar:{paddingTop:7,paddingBottom:9,flexDirection:'row',borderTopWidth:1,borderTopColor:palette.line,backgroundColor:palette.white},tab:{flex:1,alignItems:'center'},tabPressed:{opacity:.65},tabIconWrap:{width:43,height:30,alignItems:'center',justifyContent:'center',borderRadius:15},tabIconWrapActive:{backgroundColor:'#e8f5ce'},tabLabel:{marginTop:2,color:palette.secondary,fontSize:9,fontWeight:'700'},tabActive:{color:palette.action,fontWeight:'900'},
 });
+
+const darkPalette = {
+  background:'#101411', surface:'#1a201c', raised:'#212923', border:'#343e38',
+  text:'#f2f5f3', secondary:'#adb7b1', action:'#68c59a', actionSoft:'#20382c',
+} as const;
+
+const darkStyles = StyleSheet.create({
+  app:{backgroundColor:darkPalette.background},
+  content:{backgroundColor:darkPalette.background},
+  loginCard:{backgroundColor:darkPalette.surface},
+  topbar:{backgroundColor:darkPalette.background},
+  screenTitle:{color:darkPalette.text},
+  kicker:{color:palette.accent},
+  syncBar:{backgroundColor:darkPalette.raised},
+  syncOffline:{backgroundColor:'#33291e'},
+  syncError:{backgroundColor:'#342321'},
+  syncTitle:{color:darkPalette.text},
+  syncDetail:{color:darkPalette.secondary},
+  syncAction:{color:palette.accent},
+  syncDotOk:{backgroundColor:darkPalette.action},
+  accountHero:{backgroundColor:'#123d2c'},
+  accountCard:{borderColor:darkPalette.border,backgroundColor:darkPalette.surface},
+  accountRow:{borderBottomColor:darkPalette.border},
+  accountLabel:{color:darkPalette.secondary},
+  accountValue:{color:darkPalette.text},
+  logoutButton:{borderColor:'#5a302d',backgroundColor:'#251817'},
+  logoutIcon:{backgroundColor:'#3a211f'},
+  logoutCopy:{color:'#c1aaa7'},
+  accountVersion:{color:darkPalette.secondary},
+  themeCard:{borderColor:darkPalette.border,backgroundColor:darkPalette.surface},
+  themeTitle:{color:darkPalette.text},
+  themeCopy:{color:darkPalette.secondary},
+  themeOption:{borderColor:darkPalette.border,backgroundColor:'#151b17'},
+  themeOptionActive:{borderColor:darkPalette.action,backgroundColor:darkPalette.actionSoft},
+  themeOptionTitle:{color:darkPalette.text},
+  themeOptionTitleActive:{color:darkPalette.action},
+  themeOptionCopy:{color:darkPalette.secondary},
+  themeRadio:{borderColor:'#77827c'},
+  themeRadioActive:{borderColor:darkPalette.action},
+  themeRadioDot:{backgroundColor:darkPalette.action},
+  hero:{backgroundColor:'#123d2c'},
+  metric:{borderColor:darkPalette.border,backgroundColor:darkPalette.surface},
+  metricLabel:{color:darkPalette.secondary},
+  metricValue:{color:darkPalette.text},
+  sectionHeading:{color:darkPalette.text},
+  sectionCopy:{color:darkPalette.secondary},
+  card:{borderColor:darkPalette.border,backgroundColor:darkPalette.surface},
+  paymentRow:{borderBottomColor:darkPalette.border},
+  rowTitle:{color:darkPalette.text},
+  rowSubtitle:{color:darkPalette.secondary},
+  income:{color:darkPalette.action},
+  empty:{color:darkPalette.secondary},
+  logoutHint:{color:darkPalette.secondary},
+  paymentDetailRow:{borderColor:darkPalette.border,backgroundColor:darkPalette.surface,shadowColor:'#000'},
+  paymentDetailRowPressed:{borderColor:'#4c7561',backgroundColor:darkPalette.raised},
+  paymentBadge:{backgroundColor:'#3a2c19'},
+  paymentBadgeSuccess:{backgroundColor:'#183a29'},
+  paymentBadgeDanger:{backgroundColor:'#40211f'},
+  paymentBadgeText:{color:'#f0b35f'},
+  paymentBadgeTextSuccess:{color:darkPalette.action},
+  paymentBadgeTextDanger:{color:'#ef8b82'},
+  paymentAmountLabel:{color:darkPalette.secondary},
+  paymentPaid:{color:darkPalette.action},
+  paymentTotal:{color:darkPalette.text},
+  paymentProgress:{backgroundColor:darkPalette.border},
+  paymentProgressFill:{backgroundColor:darkPalette.action},
+  paymentOperations:{borderTopColor:darkPalette.border},
+  paymentOperationsTitle:{color:darkPalette.secondary},
+  paymentOperationAmount:{color:darkPalette.action},
+  paymentOperationDate:{color:darkPalette.secondary},
+  paymentNoOperations:{color:darkPalette.secondary},
+  paymentBalanceCopy:{color:'#f0b35f'},
+  memberSearch:{borderColor:darkPalette.border,backgroundColor:darkPalette.surface},
+  memberSearchIcon:{color:darkPalette.action},
+  memberSearchInput:{color:darkPalette.text},
+  memberSearchClear:{backgroundColor:darkPalette.raised},
+  memberSearchClearText:{color:darkPalette.secondary},
+  memberRow:{borderBottomColor:darkPalette.border},
+  memberRowPressed:{backgroundColor:darkPalette.raised},
+  memberAvatar:{backgroundColor:darkPalette.actionSoft},
+  memberAvatarText:{color:palette.accent},
+  memberPlanDot:{backgroundColor:'#6f7973'},
+  memberPlanDotActive:{backgroundColor:darkPalette.action},
+  memberPlanText:{color:darkPalette.secondary},
+  memberChevron:{color:darkPalette.secondary},
+  memberProfile:{backgroundColor:darkPalette.raised},
+  memberProfileName:{color:darkPalette.text},
+  memberProfileMeta:{color:darkPalette.secondary},
+  memberProfilePlan:{color:darkPalette.action},
+  memberProfileExpiry:{color:'#cbd2ce'},
+  memberActionCard:{borderColor:darkPalette.border,backgroundColor:darkPalette.surface},
+  memberActionCardPlan:{borderColor:'#3d594a',backgroundColor:'#19231d'},
+  memberActionCardDelete:{borderColor:'#5a302d',backgroundColor:'#251817'},
+  memberActionIcon:{backgroundColor:darkPalette.actionSoft},
+  memberActionIconText:{color:darkPalette.action},
+  memberActionIconPlan:{backgroundColor:'#2a4127'},
+  memberActionIconDelete:{backgroundColor:'#3a211f'},
+  memberActionTitle:{color:darkPalette.text},
+  memberActionCopy:{color:darkPalette.secondary},
+  memberActionChevron:{color:darkPalette.secondary},
+  planCard:{borderColor:darkPalette.border,backgroundColor:darkPalette.surface},
+  planName:{color:darkPalette.text},
+  planPrice:{color:darkPalette.action},
+  debtCard:{borderColor:'#2d624d',backgroundColor:palette.brand},
+  debtGlowLarge:{backgroundColor:'#2d765855'},
+  debtLabel:{color:palette.accent},
+  debtSubtitle:{color:'#c4d5cd'},
+  debtValue:{color:palette.white},
+  debtFooter:{borderTopColor:'#ffffff26'},
+  debtPending:{color:'#e7f0eb'},
+  debtState:{backgroundColor:'#ffffff14'},
+  debtStateDot:{backgroundColor:palette.accent},
+  debtStateText:{color:palette.accent},
+  sheet:{backgroundColor:darkPalette.surface},
+  sheetHandle:{backgroundColor:'#4b5550'},
+  sheetTitle:{color:darkPalette.text},
+  closeButton:{backgroundColor:darkPalette.raised},
+  close:{color:darkPalette.secondary},
+  fieldLabel:{color:darkPalette.secondary},
+  input:{borderColor:darkPalette.border,color:darkPalette.text,backgroundColor:'#151b17'},
+  sheetCopy:{color:darkPalette.secondary},
+  bold:{color:darkPalette.text},
+  choice:{borderColor:darkPalette.border,backgroundColor:'#151b17'},
+  choiceActive:{borderColor:darkPalette.action,backgroundColor:darkPalette.actionSoft},
+  choiceTitle:{color:darkPalette.text},
+  choicePrice:{color:darkPalette.secondary},
+  statusChoice:{borderColor:darkPalette.border,backgroundColor:'#151b17'},
+  statusChoiceActive:{borderColor:darkPalette.action,backgroundColor:darkPalette.actionSoft},
+  statusChoiceText:{color:darkPalette.secondary},
+  statusChoiceTextActive:{color:darkPalette.action},
+  planState:{backgroundColor:'#3a2c19'},
+  planStateActive:{backgroundColor:'#183a29'},
+  planStateText:{color:'#f0b35f'},
+  planStateTextActive:{color:darkPalette.action},
+  planProfile:{backgroundColor:darkPalette.raised},
+  planProfileIcon:{backgroundColor:'#2a4127'},
+  planProfileIconText:{color:darkPalette.action},
+  planProfileState:{color:darkPalette.action},
+  planProfileStateInactive:{color:'#f0b35f'},
+  issueCard:{borderColor:'#5a302d',backgroundColor:'#251817'},
+  issueTitle:{color:darkPalette.text},
+  issueDate:{color:darkPalette.secondary},
+  issueError:{color:'#ef8b82'},
+  discard:{color:darkPalette.action},
+  tabbar:{borderTopColor:darkPalette.border,backgroundColor:darkPalette.surface},
+  tabIconWrapActive:{backgroundColor:darkPalette.actionSoft},
+  tabLabel:{color:darkPalette.secondary},
+  tabActive:{color:palette.accent},
+});
+
+const styles = new Proxy(baseStyles, {
+  get(target, property: string | symbol) {
+    const baseStyle = Reflect.get(target, property);
+    if (typeof property !== 'string' || !activeDarkTheme) return baseStyle;
+    const darkStyle = Reflect.get(darkStyles, property);
+    return darkStyle ? [baseStyle, darkStyle] : baseStyle;
+  },
+}) as typeof baseStyles;

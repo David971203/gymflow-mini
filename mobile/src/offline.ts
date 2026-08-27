@@ -120,13 +120,14 @@ export const offline = {
     };
   },
 
-  async createMember(scope: string, input: { ci: string; firstName: string; lastName: string; phone?: string }) {
+  async createMember(scope: string, input: Pick<Member, 'ci' | 'firstName' | 'lastName'> & Partial<Pick<Member, 'code' | 'age' | 'sex' | 'phone' | 'address'>>) {
     await waitForActiveSync(scope);
     const database = await db();
     const id = uuid(); const operationId = uuid(); const occurredAt = new Date().toISOString();
     await database.withTransactionAsync(async () => {
       const members = await offline.members(scope);
       if (members.some((member) => member.ci === input.ci)) throw new Error('Ya existe un miembro local con ese carnet de identidad');
+      if (input.code && members.some((member) => member.code === input.code)) throw new Error('Ya existe un miembro local con ese código interno');
       members.unshift({ id, ...input, status: 'ACTIVE', memberships: [] });
       await writeCache(scope, 'members', members);
       await enqueue(scope, { id: operationId, type: 'MEMBER_CREATE', entityId: id, payload: input, occurredAt });
@@ -135,12 +136,13 @@ export const offline = {
     return id;
   },
 
-  async updateMember(scope: string, id: string, input: Partial<Pick<Member, 'ci' | 'firstName' | 'lastName' | 'phone' | 'address' | 'status'>>) {
+  async updateMember(scope: string, id: string, input: Partial<Pick<Member, 'ci' | 'code' | 'firstName' | 'lastName' | 'age' | 'sex' | 'phone' | 'address' | 'status'>>) {
     await waitForActiveSync(scope);
     const database = await db(); const operationId = uuid(); const occurredAt = new Date().toISOString();
     await database.withTransactionAsync(async () => {
       const members = await offline.members(scope);
       if (input.ci && members.some((member) => member.id !== id && member.ci === input.ci)) throw new Error('Ya existe un miembro local con ese carnet de identidad');
+      if (input.code && members.some((member) => member.id !== id && member.code === input.code)) throw new Error('Ya existe un miembro local con ese código interno');
       await writeCache(scope, 'members', members.map((member) => member.id === id ? { ...member, ...input } : member));
       await enqueue(scope, { id: operationId, type: 'MEMBER_UPDATE', entityId: id, payload: input, occurredAt });
     });

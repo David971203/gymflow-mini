@@ -78,8 +78,12 @@ model Member {
   gym       Gym          @relation(fields: [gymId], references: [id])
   /// Carnet de identidad cubano. Se conserva como texto por los ceros iniciales.
   ci        String
+  /// Código interno opcional asignado por cada gimnasio.
+  code      String?
   firstName String
   lastName  String
+  age       Int?
+  sex       String?
   phone     String?
   address   String?
   status    MemberStatus @default(ACTIVE)
@@ -90,6 +94,7 @@ model Member {
   memberships Membership[]
   payments    Payment[]
   @@unique([gymId, ci])
+  @@unique([gymId, code])
   @@index([gymId])
   @@index([status])
 }

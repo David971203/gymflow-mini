@@ -1,11 +1,13 @@
 export type Tab = 'INICIO' | 'MIEMBROS' | 'PLANES' | 'CAJA' | 'CUENTA';
-export type User = { id: string; email: string; name: string; role: 'ADMIN'; gymId: string; gym: { name: string; currency: string } };
+export type Currency = 'CUP' | 'USD';
+export type User = { id: string; email: string; name: string; role: 'ADMIN'; gymId: string; gym: { name: string; currency: Currency } };
 export type Dashboard = { members: number; activeMemberships: number; monthlyRevenue: number; pendingDebt: number; recentPayments: Movement[] };
 export type Plan = { id: string; name: string; description?: string; price: string; durationDays: number; isActive: boolean };
 export type Payment = { id: string; amount: string; paidAmount: string; status: string; member: Member; membership: { id?: string; plan: Plan }; movements: Movement[] };
 export type Movement = { id: string; amount: string; occurredAt: string; payment?: { member: Member } };
 export type Membership = { id: string; status: string; startDate: string; endDate: string; plan: Plan; payment?: Payment };
-export type Member = { id: string; ci: string; firstName: string; lastName: string; phone?: string; address?: string; status: string; memberships: Membership[] };
+export type MemberSex = 'MALE' | 'FEMALE' | 'OTHER';
+export type Member = { id: string; ci: string; code?: string | null; firstName: string; lastName: string; age?: number | null; sex?: MemberSex | null; phone?: string; address?: string; status: string; memberships: Membership[] };
 
 export type SyncOperationType = 'MEMBER_CREATE' | 'MEMBER_UPDATE' | 'MEMBER_DELETE' | 'PLAN_CREATE' | 'PLAN_UPDATE' | 'PLAN_DELETE' | 'MEMBERSHIP_ASSIGN' | 'MEMBERSHIP_UPDATE' | 'MEMBERSHIP_RENEW' | 'PAYMENT_APPLY';
 export type SyncOperation = { id: string; type: SyncOperationType; entityId: string; payload: Record<string, unknown>; occurredAt: string };

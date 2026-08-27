@@ -9,8 +9,8 @@ describe('MiniService', () => {
   it('siempre asigna el tenant autenticado al crear un miembro', async () => {
     const create = jest.fn().mockResolvedValue({ id: 'member-1' });
     const service = new MiniService({ member: { create } } as never);
-    await service.createMember({ ci: '90010112345', firstName: 'Ana', lastName: 'Pérez' }, user);
-    expect(create).toHaveBeenCalledWith({ data: { ci: '90010112345', firstName: 'Ana', lastName: 'Pérez', gymId: 'gym-1' } });
+    await service.createMember({ ci: '90010112345', code: 'SOC-001', firstName: 'Ana', lastName: 'Pérez', age: 29, sex: 'FEMALE' }, user);
+    expect(create).toHaveBeenCalledWith({ data: { ci: '90010112345', code: 'SOC-001', firstName: 'Ana', lastName: 'Pérez', age: 29, sex: 'FEMALE', gymId: 'gym-1' } });
   });
 
   it('convierte la restricción única del CI en un conflicto de negocio claro', async () => {
@@ -23,6 +23,18 @@ describe('MiniService', () => {
     await expect(
       service.createMember({ ci: '90010112345', firstName: 'Ana', lastName: 'Pérez' }, user),
     ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('rechaza códigos internos repetidos dentro del gimnasio', async () => {
+    const duplicate = new Prisma.PrismaClientKnownRequestError('Unique constraint', {
+      code: 'P2002',
+      clientVersion: '5.22.0',
+      meta: { target: ['gymId', 'code'] },
+    });
+    const service = new MiniService({ member: { create: jest.fn().mockRejectedValue(duplicate) } } as never);
+    await expect(
+      service.createMember({ ci: '90010112346', code: 'SOC-001', firstName: 'Leo', lastName: 'Díaz' }, user),
+    ).rejects.toThrow('Ya existe un miembro con ese código interno en el gimnasio');
   });
 
   it('rechaza un abono inicial superior al precio del plan', async () => {

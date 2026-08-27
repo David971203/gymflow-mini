@@ -24,7 +24,7 @@ export class MiniService {
     const existing = await this.prisma.user.findUnique({ where: { email: dto.adminEmail.toLowerCase() } });
     if (existing) throw new ConflictException('Ese correo ya tiene una cuenta');
     return this.prisma.$transaction(async (tx) => {
-      const gym = await tx.gym.create({ data: { name: dto.name, slug: dto.slug.toLowerCase(), province: dto.province, phone: dto.phone } });
+      const gym = await tx.gym.create({ data: { name: dto.name, slug: dto.slug.toLowerCase(), province: dto.province, phone: dto.phone, currency: dto.currency } });
       await tx.user.create({ data: { email: dto.adminEmail.toLowerCase(), passwordHash: await argon2.hash(dto.adminPassword), name: dto.adminName, role: UserRole.ADMIN, gymId: gym.id } });
       return gym;
     });
@@ -120,7 +120,7 @@ export class MiniService {
   async listGymMembers(gymId: string, search?: string) {
     await this.requireGym(gymId);
     return this.prisma.member.findMany({
-      where: { gymId, ...(search ? { OR: [{ ci: { contains: search } }, { firstName: { contains: search, mode: 'insensitive' } }, { lastName: { contains: search, mode: 'insensitive' } }, { phone: { contains: search } }] } : {}) },
+      where: { gymId, ...(search ? { OR: [{ code: { contains: search, mode: 'insensitive' } }, { ci: { contains: search } }, { firstName: { contains: search, mode: 'insensitive' } }, { lastName: { contains: search, mode: 'insensitive' } }, { phone: { contains: search } }] } : {}) },
       include: { memberships: { include: { plan: true, payment: true }, orderBy: { createdAt: 'desc' }, take: 1 } },
       orderBy: [{ status: 'asc' }, { firstName: 'asc' }, { lastName: 'asc' }],
     });
@@ -330,7 +330,7 @@ export class MiniService {
   listMembers(user: AuthUser, search?: string) {
     const gymId = this.gymId(user);
     return this.prisma.member.findMany({
-      where: { gymId, ...(search ? { OR: [{ ci: { contains: search } }, { firstName: { contains: search, mode: 'insensitive' } }, { lastName: { contains: search, mode: 'insensitive' } }, { phone: { contains: search } }] } : {}) },
+      where: { gymId, ...(search ? { OR: [{ code: { contains: search, mode: 'insensitive' } }, { ci: { contains: search } }, { firstName: { contains: search, mode: 'insensitive' } }, { lastName: { contains: search, mode: 'insensitive' } }, { phone: { contains: search } }] } : {}) },
       include: { memberships: { include: { plan: true, payment: true }, orderBy: { createdAt: 'desc' }, take: 1 } },
       orderBy: [{ status: 'asc' }, { firstName: 'asc' }],
     });
@@ -531,6 +531,8 @@ export class MiniService {
 
   private rethrowMemberCiConflict(error: unknown): never {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      const target = Array.isArray(error.meta?.target) ? error.meta.target.join(',') : String(error.meta?.target ?? '');
+      if (target.includes('code')) throw new ConflictException('Ya existe un miembro con ese código interno en el gimnasio');
       throw new ConflictException('Ya existe un miembro registrado con ese carnet de identidad');
     }
     throw error;

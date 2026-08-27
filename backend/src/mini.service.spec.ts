@@ -145,6 +145,12 @@ describe('MiniService', () => {
     expect(remove).toHaveBeenCalledWith({ where: { id: 'member-1' } });
   });
 
+  it('impide eliminar desde móvil un miembro de otro gimnasio', async () => {
+    const prisma = { member: { findFirst: jest.fn().mockResolvedValue(null) } };
+    const service = new MiniService(prisma as never);
+    await expect(service.deleteMember('member-other', user)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
   it('lista los cobros exclusivamente para el gimnasio seleccionado', async () => {
     const updateMany = jest.fn().mockResolvedValue({ count: 0 });
     const findMany = jest.fn().mockResolvedValue([]);

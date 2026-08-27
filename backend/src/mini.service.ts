@@ -161,6 +161,10 @@ export class MiniService {
     return { id, disposition: 'DELETED' };
   }
 
+  deleteMember(id: string, user: AuthUser) {
+    return this.deleteGymMember(this.gymId(user), id);
+  }
+
   async listGymPlans(gymId: string) {
     await this.requireGym(gymId);
     return this.prisma.plan.findMany({ where: { gymId }, orderBy: [{ isActive: 'desc' }, { price: 'asc' }] });

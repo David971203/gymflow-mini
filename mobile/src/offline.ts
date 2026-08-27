@@ -147,6 +147,20 @@ export const offline = {
     await updateState(scope, 'OFFLINE'); emit(); void syncNow(scope);
   },
 
+  async deleteMember(scope: string, id: string) {
+    await waitForActiveSync(scope);
+    const database = await db(); const operationId = uuid(); const occurredAt = new Date().toISOString();
+    await database.withTransactionAsync(async () => {
+      const [members, payments] = await Promise.all([offline.members(scope), offline.payments(scope)]);
+      const member = members.find((item) => item.id === id);
+      if (!member) throw new Error('Miembro no encontrado en este dispositivo');
+      const hasHistory = member.memberships.length > 0 || payments.some((payment) => payment.member.id === id);
+      await writeCache(scope, 'members', hasHistory ? members.map((item) => item.id === id ? { ...item, status: 'INACTIVE' } : item) : members.filter((item) => item.id !== id));
+      await enqueue(scope, { id: operationId, type: 'MEMBER_DELETE', entityId: id, payload: {}, occurredAt });
+    });
+    await updateState(scope, 'OFFLINE'); emit(); void syncNow(scope);
+  },
+
   async createPlan(scope: string, input: { name: string; price: number; durationDays: number }) {
     await waitForActiveSync(scope);
     const database = await db(); const id = uuid(); const operationId = uuid(); const occurredAt = new Date().toISOString();

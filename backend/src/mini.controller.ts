@@ -47,6 +47,7 @@ export class AdminController {
   @Get('members') members(@CurrentUser() user: AuthUser, @Query('search') search?: string) { return this.mini.listMembers(user, search); }
   @Post('members') createMember(@Body() dto: CreateMemberDto, @CurrentUser() user: AuthUser) { return this.mini.createMember(dto, user); }
   @Patch('members/:id') updateMember(@Param('id') id: string, @Body() dto: UpdateMemberDto, @CurrentUser() user: AuthUser) { return this.mini.updateMember(id, dto, user); }
+  @Delete('members/:id') deleteMember(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.mini.deleteMember(id, user); }
 
   @Get('plans') plans(@CurrentUser() user: AuthUser) { return this.mini.listPlans(user); }
   @Post('plans') createPlan(@Body() dto: CreatePlanDto, @CurrentUser() user: AuthUser) { return this.mini.createPlan(dto, user); }

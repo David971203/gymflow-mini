@@ -11,6 +11,7 @@ import {
   RenewMembershipDto,
   SyncOperationDto,
   SyncPushDto,
+  UpdateGymMembershipDto,
   UpdateMemberDto,
   UpdatePlanDto,
 } from './mini.dto';
@@ -127,6 +128,11 @@ export class SyncService {
         const dto = await this.payload(CreateMembershipDto, { ...operation.payload, clientMembershipId: operation.entityId, clientMutationId: operation.id, occurredAt: operation.occurredAt });
         const membership = await this.mini.createMembership(dto, user);
         return { status: 'APPLIED', result: { id: membership.id, paymentId: membership.payment?.id ?? null } };
+      }
+      case 'MEMBERSHIP_UPDATE': {
+        const dto = await this.payload(UpdateGymMembershipDto, operation.payload);
+        const membership = await this.mini.updateMembership(operation.entityId, dto, user);
+        return { status: 'APPLIED', result: { id: membership.id } };
       }
       case 'MEMBERSHIP_RENEW': {
         const dto = await this.payload(RenewMembershipDto, { ...operation.payload, clientMutationId: operation.id, occurredAt: operation.occurredAt });

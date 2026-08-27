@@ -90,6 +90,12 @@ describe('MiniService', () => {
     await expect(service.createGymMembership('gym-1', 'member-1', { planId: 'plan-1' }, superUser)).rejects.toBeInstanceOf(ConflictException);
   });
 
+  it('impide editar desde móvil una membresía de otro gimnasio', async () => {
+    const prisma = { membership: { findFirst: jest.fn().mockResolvedValue(null) } };
+    const service = new MiniService(prisma as never);
+    await expect(service.updateMembership('membership-other', { status: 'CANCELLED' as never }, user)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
   it('protege al único administrador activo del gimnasio', async () => {
     const prisma = {
       user: { findFirst: jest.fn().mockResolvedValue({ id: 'admin-1', isActive: true }), count: jest.fn().mockResolvedValue(0) },

@@ -51,4 +51,27 @@ describe('SyncService', () => {
     expect(mini.createMembership).toHaveBeenCalledWith(expect.objectContaining({ memberId: canonicalId }), user);
     expect(receipts).toHaveLength(2);
   });
+
+  it('sincroniza la edición offline de una membresía', async () => {
+    const updateOperation = {
+      id: '88888888-8888-4888-8888-888888888888',
+      type: 'MEMBERSHIP_UPDATE' as const,
+      entityId: '99999999-9999-4999-8999-999999999999',
+      occurredAt: operation.occurredAt,
+      payload: { planId: '77777777-7777-4777-8777-777777777777', status: 'ACTIVE' },
+    };
+    const prisma = {
+      syncReceipt: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        upsert: jest.fn().mockImplementation(({ create }) => ({ ...create, result: create.result ?? null, message: create.message ?? null })),
+      },
+    };
+    const mini = { updateMembership: jest.fn().mockResolvedValue({ id: updateOperation.entityId }) };
+    const service = new SyncService(prisma as never, mini as never);
+
+    const response = await service.push({ operations: [updateOperation] }, user);
+
+    expect(response.results[0].status).toBe('APPLIED');
+    expect(mini.updateMembership).toHaveBeenCalledWith(updateOperation.entityId, expect.objectContaining(updateOperation.payload), user);
+  });
 });

@@ -54,6 +54,7 @@ export class AdminController {
 
   @Get('memberships') memberships(@CurrentUser() user: AuthUser, @Query('memberId') memberId?: string) { return this.mini.listMemberships(user, memberId); }
   @Post('memberships') createMembership(@Body() dto: CreateMembershipDto, @CurrentUser() user: AuthUser) { return this.mini.createMembership(dto, user); }
+  @Patch('memberships/:id') updateMembership(@Param('id') id: string, @Body() dto: UpdateGymMembershipDto, @CurrentUser() user: AuthUser) { return this.mini.updateMembership(id, dto, user); }
   @Post('memberships/:id/renew') renew(@Param('id') id: string, @Body() dto: RenewMembershipDto, @CurrentUser() user: AuthUser) { return this.mini.renewMembership(id, dto, user); }
 
   @Get('payments') payments(@CurrentUser() user: AuthUser) { return this.mini.listPayments(user); }

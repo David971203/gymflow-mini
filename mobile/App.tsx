@@ -99,14 +99,14 @@ function DashboardScreen({ scope, revision }: ScreenProps) {
 function MembersScreen({ scope, revision }: ScreenProps) {
   const [members, setMembers] = useState<Member[]>([]); const [plans, setPlans] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(true); const [addOpen, setAddOpen] = useState(false); const [editing, setEditing] = useState<Member | null>(null); const [assigning, setAssigning] = useState<Member | null>(null);
-  const load = useCallback(() => { setLoading(true); Promise.all([offline.members(scope), offline.plans(scope)]).then(([m, p]) => { setMembers(m); setPlans(p.filter(x => x.isActive)); }).catch(showError).finally(() => setLoading(false)); }, [scope]);
+  const load = useCallback(() => { setLoading(true); Promise.all([offline.members(scope), offline.plans(scope)]).then(([m, p]) => { setMembers(m); setPlans(p); }).catch(showError).finally(() => setLoading(false)); }, [scope]);
   const refresh = useCallback(() => { void syncNow(scope).then(load); }, [scope, load]);
   useEffect(load, [load, revision]);
   return <>
     <ScrollView refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} />} contentContainerStyle={styles.scroll}>
       <PrimaryButton label="+ Registrar miembro" onPress={() => setAddOpen(true)} />
       <SectionTitle title={`${members.length} miembros`} subtitle="Edita sus datos o toca Plan para gestionar su membresía" />
-      <View style={styles.card}>{members.map(member => { const current = member.memberships[0]; return <View key={member.id} style={styles.memberRow}>
+      <View style={styles.card}>{members.map(member => { const current = editableMembership(member) ?? member.memberships[0]; return <View key={member.id} style={styles.memberRow}>
         <Pressable onPress={() => setEditing(member)} style={styles.memberMain}><View style={styles.memberAvatar}><Text>{member.firstName[0]}{member.lastName[0]}</Text></View><View style={styles.rowMain}><Text style={styles.rowTitle}>{member.firstName} {member.lastName}</Text><Text style={styles.rowSubtitle}>CI {member.ci} · {current ? `${current.plan.name} · ${current.status}` : 'Sin plan asignado'}</Text></View></Pressable><View style={styles.memberActions}><Pressable onPress={() => setEditing(member)} style={styles.memberAction}><Text style={styles.memberActionText}>Editar</Text></Pressable><Pressable onPress={() => setAssigning(member)} style={styles.memberAction}><Text style={styles.memberActionText}>Plan</Text></Pressable></View>
       </View>; })}{!members.length && <Empty text="Registra tu primer miembro" />}</View>
     </ScrollView>
@@ -155,12 +155,16 @@ function PlanForm({ scope, open, onClose, onSaved }: FormProps) {
 }
 
 function AssignPlanForm({ scope, member, plans, onClose, onSaved }: { scope: string; member: Member | null; plans: Plan[]; onClose: () => void; onSaved: () => void }) {
-  const [planId, setPlanId] = useState(''); const [amount, setAmount] = useState('');
-  useEffect(() => setPlanId(plans[0]?.id ?? ''), [plans, member]);
-  return <Sheet open={!!member} title={`Plan para ${member?.firstName ?? ''}`} onClose={onClose}>
-    <Text style={styles.fieldLabel}>Selecciona el plan</Text><View style={styles.choices}>{plans.map(plan => <Pressable key={plan.id} onPress={() => setPlanId(plan.id)} style={[styles.choice, planId === plan.id && styles.choiceActive]}><Text style={styles.choiceTitle}>{plan.name}</Text><Text style={styles.choicePrice}>{money(plan.price)}</Text></Pressable>)}</View>
-    <Field label="Abono inicial (opcional)" value={amount} onChangeText={setAmount} keyboardType="numeric" />
-    <PrimaryButton label="Asignar plan" disabled={!planId} onPress={() => member && offline.assignPlan(scope, { memberId: member.id, planId, ...(Number(amount) > 0 ? { initialPayment: Number(amount), paymentMethod: 'CASH' } : {}) }).then(onSaved).catch(showError)} />
+  const membership = member ? editableMembership(member) : undefined;
+  const availablePlans = plans.filter(plan => plan.isActive || plan.id === membership?.plan.id);
+  const [planId, setPlanId] = useState(''); const [amount, setAmount] = useState(''); const [status, setStatus] = useState('ACTIVE'); const [saving, setSaving] = useState(false);
+  useEffect(() => { setPlanId(membership?.plan.id ?? availablePlans.find(plan => plan.isActive)?.id ?? ''); setStatus(membership?.status ?? 'ACTIVE'); setAmount(''); }, [member, membership?.id, membership?.plan.id, membership?.status, plans]);
+  const save = async () => { if (!member || !planId) return; setSaving(true); try { if (membership) await offline.updateMembership(scope, member.id, membership.id, { planId, status }); else await offline.assignPlan(scope, { memberId: member.id, planId, ...(Number(amount) > 0 ? { initialPayment: Number(amount), paymentMethod: 'CASH' } : {}) }); onSaved(); } catch (error) { showError(error); } finally { setSaving(false); } };
+  return <Sheet open={!!member} title={`${membership ? 'Editar membresía' : 'Plan'} de ${member?.firstName ?? ''}`} onClose={onClose}>
+    {membership && <Text style={styles.sheetCopy}>Plan actual: <Text style={styles.bold}>{membership.plan.name}</Text></Text>}
+    <Text style={styles.fieldLabel}>Selecciona el plan</Text><View style={styles.choices}>{availablePlans.map(plan => <Pressable key={plan.id} onPress={() => setPlanId(plan.id)} style={[styles.choice, planId === plan.id && styles.choiceActive]}><Text style={styles.choiceTitle}>{plan.name}{plan.id === membership?.plan.id ? ' · Actual' : ''}</Text><Text style={styles.choicePrice}>{money(plan.price)}</Text></Pressable>)}</View>
+    {membership ? <><Text style={styles.fieldLabel}>Estado de la membresía</Text><View style={styles.statusChoices}>{['ACTIVE','SCHEDULED','EXPIRED','CANCELLED'].map(value=><Pressable key={value} onPress={() => setStatus(value)} style={[styles.statusChoice, status === value && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, status === value && styles.statusChoiceTextActive]}>{membershipStatusLabel(value)}</Text></Pressable>)}</View></> : <Field label="Abono inicial (opcional)" value={amount} onChangeText={setAmount} keyboardType="numeric" />}
+    <PrimaryButton label={saving ? "Guardando…" : membership ? "Guardar membresía" : "Asignar plan"} disabled={saving || !planId} onPress={() => void save()} />
   </Sheet>;
 }
 
@@ -184,7 +188,7 @@ function SyncIssues({ open, scope, revision, onClose }: { open: boolean; scope: 
   const [issues, setIssues] = useState<SyncIssue[]>([]);
   const load = useCallback(() => { void getSyncIssues(scope).then(setIssues).catch(showError); }, [scope]);
   useEffect(() => { if (open) load(); }, [open, revision, load]);
-  const names: Record<SyncIssue['type'], string> = { MEMBER_CREATE: 'Registrar miembro', MEMBER_UPDATE: 'Editar miembro', PLAN_CREATE: 'Crear plan', PLAN_UPDATE: 'Editar plan', MEMBERSHIP_ASSIGN: 'Asignar plan', MEMBERSHIP_RENEW: 'Renovar plan', PAYMENT_APPLY: 'Registrar cobro' };
+  const names: Record<SyncIssue['type'], string> = { MEMBER_CREATE: 'Registrar miembro', MEMBER_UPDATE: 'Editar miembro', PLAN_CREATE: 'Crear plan', PLAN_UPDATE: 'Editar plan', MEMBERSHIP_ASSIGN: 'Asignar plan', MEMBERSHIP_UPDATE: 'Editar membresía', MEMBERSHIP_RENEW: 'Renovar plan', PAYMENT_APPLY: 'Registrar cobro' };
   return <Sheet open={open} title="Cambios por revisar" onClose={onClose}>
     <Text style={styles.sheetCopy}>El servidor rechazó estos cambios. Los datos válidos ya fueron sincronizados.</Text>
     {issues.map((issue) => <View key={issue.id} style={styles.issueCard}><Text style={styles.issueTitle}>{names[issue.type]}</Text><Text style={styles.issueDate}>{new Date(issue.occurredAt).toLocaleString('es-CU')}</Text><Text style={styles.issueError}>{issue.error}</Text><Pressable onPress={() => discardSyncIssue(scope, issue.id).then(load).catch(showError)}><Text style={styles.discard}>Descartar aviso</Text></Pressable></View>)}
@@ -201,6 +205,8 @@ function SectionTitle({ title, subtitle }: { title: string; subtitle: string }) 
 function Row({ title, subtitle, value }: { title: string; subtitle: string; value: string }) { return <View style={styles.paymentRow}><View style={styles.rowMain}><Text style={styles.rowTitle}>{title}</Text><Text style={styles.rowSubtitle}>{subtitle}</Text></View><Text style={styles.income}>{value}</Text></View>; }
 function Empty({ text }: { text: string }) { return <Text style={styles.empty}>{text}</Text>; }
 function showError(error: unknown) { Alert.alert('Atención', error instanceof Error ? error.message : 'Ocurrió un error'); }
+function editableMembership(member: Member) { const now=Date.now(); return member.memberships.find(membership => (membership.status === 'ACTIVE' && new Date(membership.endDate).getTime() >= now) || membership.status === 'SCHEDULED'); }
+function membershipStatusLabel(status: string) { return ({ ACTIVE:'Activa', SCHEDULED:'Programada', EXPIRED:'Vencida', CANCELLED:'Cancelada' } as Record<string,string>)[status] ?? status; }
 
 const styles = StyleSheet.create({
   center:{flex:1,alignItems:'center',justifyContent:'center',backgroundColor:'#173f31'}, app:{flex:1,backgroundColor:'#f5f5ef'}, content:{flex:1},

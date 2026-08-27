@@ -390,6 +390,13 @@ export class MiniService {
     return this.assignMembership(dto, user);
   }
 
+  async updateMembership(id: string, dto: UpdateGymMembershipDto, user: AuthUser) {
+    const gymId = this.gymId(user);
+    const membership = await this.prisma.membership.findFirst({ where: { id, member: { gymId } }, select: { memberId: true } });
+    if (!membership) throw new NotFoundException('Membresía no encontrada');
+    return this.updateGymMembership(gymId, membership.memberId, id, dto);
+  }
+
   async renewMembership(id: string, dto: RenewMembershipDto, user: AuthUser) {
     const gymId = this.gymId(user);
     const current = await this.prisma.membership.findFirst({ where: { id, member: { gymId } } });

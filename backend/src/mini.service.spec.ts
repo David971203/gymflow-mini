@@ -70,6 +70,12 @@ describe('MiniService', () => {
     await expect(service.updateGymPlan('gym-1', 'plan-other', { name: 'Otro' })).rejects.toBeInstanceOf(NotFoundException);
   });
 
+  it('impide eliminar desde móvil un plan de otro gimnasio', async () => {
+    const prisma = { gym: { findUnique: jest.fn().mockResolvedValue({ id: 'gym-1' }) }, plan: { findFirst: jest.fn().mockResolvedValue(null) } };
+    const service = new MiniService(prisma as never);
+    await expect(service.deletePlan('plan-other', user)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
   it('impide asignar una membresía a un miembro de otro gimnasio desde plataforma', async () => {
     const prisma = {
       gym: { findUnique: jest.fn().mockResolvedValue({ id: 'gym-1' }) },

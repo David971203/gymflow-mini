@@ -52,6 +52,7 @@ export class AdminController {
   @Get('plans') plans(@CurrentUser() user: AuthUser) { return this.mini.listPlans(user); }
   @Post('plans') createPlan(@Body() dto: CreatePlanDto, @CurrentUser() user: AuthUser) { return this.mini.createPlan(dto, user); }
   @Patch('plans/:id') updatePlan(@Param('id') id: string, @Body() dto: UpdatePlanDto, @CurrentUser() user: AuthUser) { return this.mini.updatePlan(id, dto, user); }
+  @Delete('plans/:id') deletePlan(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.mini.deletePlan(id, user); }
 
   @Get('memberships') memberships(@CurrentUser() user: AuthUser, @Query('memberId') memberId?: string) { return this.mini.listMemberships(user, memberId); }
   @Post('memberships') createMembership(@Body() dto: CreateMembershipDto, @CurrentUser() user: AuthUser) { return this.mini.createMembership(dto, user); }

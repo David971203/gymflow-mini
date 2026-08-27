@@ -97,4 +97,27 @@ describe('SyncService', () => {
     expect(response.results[0].status).toBe('APPLIED');
     expect(mini.deleteMember).toHaveBeenCalledWith(deleteOperation.entityId, user);
   });
+
+  it('sincroniza la eliminación offline de un plan', async () => {
+    const deleteOperation = {
+      id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      type: 'PLAN_DELETE' as const,
+      entityId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      occurredAt: operation.occurredAt,
+      payload: {},
+    };
+    const prisma = {
+      syncReceipt: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        upsert: jest.fn().mockImplementation(({ create }) => ({ ...create, result: create.result ?? null, message: create.message ?? null })),
+      },
+    };
+    const mini = { deletePlan: jest.fn().mockResolvedValue({ id: deleteOperation.entityId, disposition: 'ARCHIVED' }) };
+    const service = new SyncService(prisma as never, mini as never);
+
+    const response = await service.push({ operations: [deleteOperation] }, user);
+
+    expect(response.results[0].status).toBe('APPLIED');
+    expect(mini.deletePlan).toHaveBeenCalledWith(deleteOperation.entityId, user);
+  });
 });

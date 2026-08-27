@@ -128,6 +128,10 @@ export class SyncService {
         const plan = await this.mini.updatePlan(operation.entityId, dto, user);
         return { status: 'APPLIED', result: { id: plan.id } };
       }
+      case 'PLAN_DELETE': {
+        const result = await this.mini.deletePlan(operation.entityId, user);
+        return { status: 'APPLIED', result };
+      }
       case 'MEMBERSHIP_ASSIGN': {
         const dto = await this.payload(CreateMembershipDto, { ...operation.payload, clientMembershipId: operation.entityId, clientMutationId: operation.id, occurredAt: operation.occurredAt });
         const membership = await this.mini.createMembership(dto, user);

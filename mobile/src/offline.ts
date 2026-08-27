@@ -180,8 +180,25 @@ export const offline = {
     const database = await db(); const operationId = uuid(); const occurredAt = new Date().toISOString();
     await database.withTransactionAsync(async () => {
       const plans = await offline.plans(scope);
+      if (input.name && plans.some((plan) => plan.id !== id && plan.name.trim().toLowerCase() === input.name!.trim().toLowerCase())) throw new Error('Ya existe un plan local con ese nombre');
       await writeCache(scope, 'plans', plans.map((plan) => plan.id === id ? { ...plan, ...input, ...(input.price !== undefined ? { price: String(input.price) } : {}) } : plan));
       await enqueue(scope, { id: operationId, type: 'PLAN_UPDATE', entityId: id, payload: input, occurredAt });
+    });
+    await updateState(scope, 'OFFLINE'); emit(); void syncNow(scope);
+  },
+
+  async deletePlan(scope: string, id: string) {
+    await waitForActiveSync(scope);
+    const database = await db(); const operationId = uuid(); const occurredAt = new Date().toISOString();
+    await database.withTransactionAsync(async () => {
+      const [plans, members] = await Promise.all([offline.plans(scope), offline.members(scope)]);
+      const plan = plans.find((item) => item.id === id);
+      if (!plan) throw new Error('Plan no encontrado en este dispositivo');
+      const memberships = members.flatMap((member) => member.memberships).filter((membership) => membership.plan.id === id);
+      const now = Date.now();
+      if (memberships.some((membership) => membership.status === 'ACTIVE' && new Date(membership.endDate).getTime() >= now)) throw new Error('No se puede eliminar un plan con membresías activas');
+      await writeCache(scope, 'plans', memberships.length ? plans.map((item) => item.id === id ? { ...item, isActive: false } : item) : plans.filter((item) => item.id !== id));
+      await enqueue(scope, { id: operationId, type: 'PLAN_DELETE', entityId: id, payload: {}, occurredAt });
     });
     await updateState(scope, 'OFFLINE'); emit(); void syncNow(scope);
   },

@@ -375,6 +375,10 @@ export class MiniService {
     return this.updatePlanForGym(this.gymId(user), id, dto);
   }
 
+  deletePlan(id: string, user: AuthUser) {
+    return this.deleteGymPlan(this.gymId(user), id);
+  }
+
   private async updatePlanForGym(gymId: string, id: string, dto: UpdatePlanDto) {
     const plan = await this.prisma.plan.findFirst({ where: { id, gymId } });
     if (!plan) throw new NotFoundException('Plan no encontrado');

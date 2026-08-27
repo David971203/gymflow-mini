@@ -104,11 +104,26 @@ describe('MiniService', () => {
     const prisma = {
       gym: { findUnique: jest.fn().mockResolvedValue({ id: 'gym-1' }) },
       plan: { findFirst: jest.fn().mockResolvedValue({ id: 'plan-1' }), update, delete: remove },
-      membership: { count: jest.fn().mockResolvedValue(2) },
+      membership: { findFirst: jest.fn().mockResolvedValue(null), count: jest.fn().mockResolvedValue(2) },
     };
     const service = new MiniService(prisma as never);
     await expect(service.deleteGymPlan('gym-1', 'plan-1')).resolves.toEqual({ id: 'plan-1', disposition: 'ARCHIVED' });
     expect(update).toHaveBeenCalledWith({ where: { id: 'plan-1' }, data: { isActive: false } });
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('impide eliminar un plan que tiene una membresía activa vigente', async () => {
+    const update = jest.fn();
+    const remove = jest.fn();
+    const prisma = {
+      gym: { findUnique: jest.fn().mockResolvedValue({ id: 'gym-1' }) },
+      plan: { findFirst: jest.fn().mockResolvedValue({ id: 'plan-1' }), update, delete: remove },
+      membership: { findFirst: jest.fn().mockResolvedValue({ id: 'membership-active' }), count: jest.fn() },
+    };
+    const service = new MiniService(prisma as never);
+    await expect(service.deleteGymPlan('gym-1', 'plan-1')).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.membership.count).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
     expect(remove).not.toHaveBeenCalled();
   });
 

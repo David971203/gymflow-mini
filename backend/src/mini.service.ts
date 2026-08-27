@@ -180,6 +180,8 @@ export class MiniService {
     await this.requireGym(gymId);
     const plan = await this.prisma.plan.findFirst({ where: { id, gymId } });
     if (!plan) throw new NotFoundException('Plan no encontrado');
+    const activeMembership = await this.prisma.membership.findFirst({ where: { planId: id, status: MembershipStatus.ACTIVE, endDate: { gte: new Date() }, member: { gymId } } });
+    if (activeMembership) throw new ConflictException('No se puede eliminar un plan con membresías activas');
     const memberships = await this.prisma.membership.count({ where: { planId: id, member: { gymId } } });
     if (memberships > 0) {
       await this.prisma.plan.update({ where: { id }, data: { isActive: false } });

@@ -4,9 +4,9 @@ export type GymSubscriptionPlan = 'TRIAL' | 'MONTHLY' | 'ANNUAL';
 export type User = { id: string; email: string; name: string; role: 'ADMIN'; gymId: string; gym: { name: string; currency: Currency; subscriptionPlan: GymSubscriptionPlan | null; subscriptionTrialDays: number; subscriptionStartedAt: string | null; subscriptionEndsAt: string | null } };
 export type Dashboard = { members: number; activeMemberships: number; monthlyRevenue: number; pendingDebt: number; recentPayments: Movement[] };
 export type Plan = { id: string; name: string; description?: string; price: string; durationDays: number; isActive: boolean };
-export type Payment = { id: string; amount: string; paidAmount: string; status: string; createdAt?: string; dueDate?: string | null; member: Member; membership: { id?: string; plan: Plan }; movements: Movement[] };
+export type Payment = { id: string; amount: string; paidAmount: string; status: string; createdAt?: string; dueDate?: string | null; member: Member; membership: { id?: string; plan: Plan; periodCount?: number }; movements: Movement[] };
 export type Movement = { id: string; amount: string; occurredAt: string; payment?: { member: Member } };
-export type Membership = { id: string; status: string; startDate: string; endDate: string; plan: Plan; payment?: Payment };
+export type Membership = { id: string; status: string; startDate: string; endDate: string; periodCount?: number; plan: Plan; payment?: Payment };
 export type MemberSex = 'MALE' | 'FEMALE' | 'OTHER';
 export type Member = { id: string; ci: string; code?: string | null; firstName: string; lastName: string; age?: number | null; sex?: MemberSex | null; phone?: string; address?: string; status: string; memberships: Membership[] };
 

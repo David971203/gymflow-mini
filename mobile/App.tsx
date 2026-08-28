@@ -20,10 +20,12 @@ const money = (value: number | string) => `${Number(value).toLocaleString('es-CU
 const monthNames = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 type PaymentMonthFilter = 'ALL' | number;
 type PaymentYearFilter = 'ALL' | number;
+type MembershipPeriodCount = 1 | 2 | 3 | 6 | 12;
+const membershipPeriodOptions: MembershipPeriodCount[] = [1, 2, 3, 6, 12];
 
 function subscriptionIsActive() { return !!activeSubscriptionEndsAt && new Date(activeSubscriptionEndsAt).getTime() > Date.now(); }
 function ensureActiveSubscription() { if (!subscriptionIsActive()) throw new Error(renewalMessage); }
-function withActiveSubscription(action: () => void) { if (!subscriptionIsActive()) { Alert.alert('Membresía vencida', renewalMessage); return; } action(); }
+function withActiveSubscription(action: () => void) { if (!subscriptionIsActive()) { showError(new Error(renewalMessage)); return; } action(); }
 function gymSubscriptionLabel(plan: GymSubscriptionPlan | null, trialDays = activeSubscriptionTrialDays) { return !plan?'Sin membresía':plan==='TRIAL'?`Prueba gratuita · ${trialDays} días`:({MONTHLY:'Mensual',ANNUAL:'Anual'} as Record<Exclude<GymSubscriptionPlan,'TRIAL'>,string>)[plan]; }
 
 function paymentCreatedDate(payment: Payment) {
@@ -32,6 +34,12 @@ function paymentCreatedDate(payment: Payment) {
   if (!value) return null;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function paymentIsDue(payment: Payment, now = Date.now()) {
+  if (!payment.dueDate) return true;
+  const dueAt = new Date(payment.dueDate).getTime();
+  return Number.isNaN(dueAt) || dueAt <= now;
 }
 
 function paymentPeriodLabel(month: PaymentMonthFilter, year: PaymentYearFilter) {
@@ -96,8 +104,52 @@ const tabs: { id: Tab; icon: TabIconName; activeIcon: TabIconName; label: string
 type ThemePreference = 'system' | 'light' | 'dark';
 const THEME_STORAGE_KEY = 'gymflow_mini_theme';
 const SHOW_THEME_SELECTOR = false;
+const SHOW_SCHEDULED_MEMBERSHIP_UI = false;
+const PROFILE_REFRESH_INTERVAL_MS = 30_000;
 let activeDarkTheme = false;
 const KeyboardScrollContext = createContext<((target: number) => void) | null>(null);
+type ErrorToastSubscriber = { priority: number; show: (message: string) => void };
+const errorToastSubscribers = new Map<symbol, ErrorToastSubscriber>();
+let pendingErrorToastMessage: string | null = null;
+
+function publishErrorToast(message: string) {
+  const subscriber = [...errorToastSubscribers.values()].sort((left, right) => right.priority - left.priority)[0];
+  if (subscriber) subscriber.show(message);
+  else pendingErrorToastMessage = message;
+}
+
+function ErrorToastHost({ active = true, priority = 0 }: { active?: boolean; priority?: number }) {
+  const [message, setMessage] = useState<string | null>(null);
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!active) return;
+    const id = Symbol('error-toast-host');
+    const show = (nextMessage: string) => {
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+      setMessage(nextMessage);
+      hideTimer.current = setTimeout(() => setMessage(null), 4500);
+    };
+    errorToastSubscribers.set(id, { priority, show });
+    if (pendingErrorToastMessage) {
+      const pendingMessage = pendingErrorToastMessage;
+      pendingErrorToastMessage = null;
+      show(pendingMessage);
+    }
+    return () => {
+      errorToastSubscribers.delete(id);
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+      hideTimer.current = null;
+    };
+  }, [active, priority]);
+  if (!active || !message) return null;
+  return <View pointerEvents="box-none" style={styles.errorToastLayer}>
+    <View accessibilityRole="alert" accessibilityLiveRegion="assertive" style={styles.errorToast}>
+      <Ionicons name="alert-circle" size={23} color="#fff" />
+      <View style={styles.errorToastBody}><Text style={styles.errorToastTitle}>No se pudo completar</Text><Text style={styles.errorToastMessage}>{message}</Text></View>
+      <Pressable accessibilityRole="button" accessibilityLabel="Cerrar mensaje de error" hitSlop={10} onPress={() => setMessage(null)} style={styles.errorToastClose}><Ionicons name="close" size={18} color="#fff" /></Pressable>
+    </View>
+  </View>;
+}
 
 function useRevealFocusedInput(scrollRef: React.RefObject<ScrollView | null>, additionalOffset: number) {
   const activeTarget = useRef<number | null>(null);
@@ -130,9 +182,14 @@ export default function App() {
     }).finally(() => setRestoring(false));
   }, []);
   const changeTheme = (nextTheme: ThemePreference) => { setThemePreference(nextTheme); void SecureStore.setItemAsync(THEME_STORAGE_KEY, nextTheme).catch(showError); };
-  if (restoring) return <View style={styles.center}><ActivityIndicator color="#c9f47b" size="large" /></View>;
-  if (!user) return <Login onLogin={setUser} />;
-  return <AdminApp user={user} dark={dark} themePreference={themePreference} onThemeChange={changeTheme} onLogout={async () => { await api.logout(); setUser(null); }} />;
+  return <>
+    {restoring
+      ? <View style={styles.center}><ActivityIndicator color="#c9f47b" size="large" /></View>
+      : !user
+        ? <Login onLogin={setUser} />
+        : <AdminApp user={user} dark={dark} themePreference={themePreference} onThemeChange={changeTheme} onLogout={async () => { await api.logout(); setUser(null); }} />}
+    <ErrorToastHost />
+  </>;
 }
 
 function Login({ onLogin }: { onLogin: (user: User) => void }) {
@@ -144,7 +201,7 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
   const submit = async () => {
     setLoading(true);
     try { onLogin(await api.login(email.trim(), password)); }
-    catch (error) { Alert.alert('No pudimos entrar', (error as Error).message); }
+    catch (error) { showError(error); }
     finally { setLoading(false); }
   };
   return <SafeAreaView style={styles.loginPage}>
@@ -174,25 +231,51 @@ function AdminApp({ user, dark, themePreference, onThemeChange, onLogout }: { us
   const [memberEntryFilter, setMemberEntryFilter] = useState<MemberFilter>('ALL');
   const [ready, setReady] = useState(false); const [revision, setRevision] = useState(0); const [issuesOpen, setIssuesOpen] = useState(false);
   const [syncState, setSyncState] = useState<SyncState>({ phase: 'STARTING', pending: 0, rejected: 0 });
+  const lastSyncErrorToast = useRef('');
+  const profileRefreshInFlight = useRef(false);
   const scope = currentUser.gymId;
   activeCurrency = currentUser.gym.currency;
   activeSubscriptionEndsAt = currentUser.gym.subscriptionEndsAt ?? '';
   activeSubscriptionTrialDays = currentUser.gym.subscriptionTrialDays ?? 7;
-  const refreshProfile = useCallback(() => { void api.restore().then(setCurrentUser).catch(() => undefined); }, []);
+  const refreshProfile = useCallback(async () => {
+    if (profileRefreshInFlight.current) return;
+    profileRefreshInFlight.current = true;
+    try {
+      const network = await Network.getNetworkStateAsync().catch(() => null);
+      if (network?.isConnected === false) return;
+      setCurrentUser(await api.restore());
+    } catch {
+      // El perfil almacenado sigue disponible mientras el dispositivo está sin conexión.
+    } finally {
+      profileRefreshInFlight.current = false;
+    }
+  }, []);
   useEffect(() => {
     let mounted = true;
     const unsubscribe = subscribeOffline(() => { if (mounted) { setRevision((value) => value + 1); setSyncState(getSyncState(scope)); } });
     void initializeOffline(scope).then(() => { if (mounted) { setReady(true); setSyncState(getSyncState(scope)); } return syncNow(scope); });
-    const networkSubscription = Network.addNetworkStateListener((state) => { if (state.isConnected !== false) { refreshProfile(); void syncNow(scope); } });
-    const appSubscription = AppState.addEventListener('change', (state) => { if (state === 'active') { refreshProfile(); void syncNow(scope); } });
-    return () => { mounted = false; unsubscribe(); networkSubscription.remove(); appSubscription.remove(); };
+    const networkSubscription = Network.addNetworkStateListener((state) => { if (state.isConnected !== false) { void refreshProfile(); void syncNow(scope); } });
+    const appSubscription = AppState.addEventListener('change', (state) => { if (state === 'active') { void refreshProfile(); void syncNow(scope); } });
+    const profileInterval = setInterval(() => { if (AppState.currentState === 'active') void refreshProfile(); }, PROFILE_REFRESH_INTERVAL_MS);
+    return () => { mounted = false; unsubscribe(); networkSubscription.remove(); appSubscription.remove(); clearInterval(profileInterval); };
   }, [scope,refreshProfile]);
+  useEffect(() => {
+    const signature = `${syncState.phase}:${syncState.message ?? ''}:${syncState.rejected}`;
+    if (syncState.phase !== 'ERROR' && syncState.rejected === 0) { lastSyncErrorToast.current = ''; return; }
+    if (lastSyncErrorToast.current === signature) return;
+    lastSyncErrorToast.current = signature;
+    if (syncState.message) { showError(new Error(syncState.message)); return; }
+    void getSyncIssues(scope).then((issues) => {
+      const latestIssue = [...issues].sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))[0];
+      showError(new Error(latestIssue?.error ?? `El servidor rechazó ${syncState.rejected} cambio${syncState.rejected === 1 ? '' : 's'}.`));
+    }).catch(showError);
+  }, [scope, syncState.phase, syncState.message, syncState.rejected]);
   if (!ready) return <View style={styles.center}><ActivityIndicator color="#c9f47b" size="large" /></View>;
   return <SafeAreaView style={styles.app}><StatusBar barStyle={dark ? "light-content" : "dark-content"} />
     <View style={styles.topbar}>
       <View><Text style={styles.kicker}>{currentUser.gym.name.toUpperCase()}</Text><Text style={styles.screenTitle}>{tabs.find((item) => item.id === tab)?.label}</Text></View>
     </View>
-    <SyncBar state={syncState} onPress={() => { refreshProfile(); syncState.rejected > 0 ? setIssuesOpen(true) : void syncNow(scope); }} />
+    <SyncBar state={syncState} onPress={() => { void refreshProfile(); syncState.rejected > 0 ? setIssuesOpen(true) : void syncNow(scope); }} />
     <View style={styles.content}>
       {tab === 'INICIO' && <DashboardScreen scope={scope} revision={revision} onOpenUpcoming={() => { setMemberEntryFilter('UPCOMING'); setTab('MIEMBROS'); }} />}
       {tab === 'MIEMBROS' && <MembersScreen scope={scope} revision={revision} initialFilter={memberEntryFilter} />}
@@ -231,7 +314,7 @@ function AccountScreen({ user, themePreference, onThemeChange, onLogout }: { use
   const plan = user.gym.subscriptionPlan;
   const expired = !subscriptionIsActive();
   const remaining = Math.max(0,Math.ceil((new Date(user.gym.subscriptionEndsAt ?? 0).getTime()-Date.now())/86_400_000));
-  const openWhatsApp = (message:string) => { const url=`https://wa.me/${renewalWhatsApp}?text=${encodeURIComponent(message)}`; void Linking.openURL(url).catch(() => Alert.alert('No se pudo abrir WhatsApp', renewalWhatsApp ? 'Comprueba que WhatsApp esté instalado.' : 'Configura el número de renovación de GymFlow Mini.')); };
+  const openWhatsApp = (message:string) => { const url=`https://wa.me/${renewalWhatsApp}?text=${encodeURIComponent(message)}`; void Linking.openURL(url).catch(() => showError(new Error(renewalWhatsApp ? 'Comprueba que WhatsApp esté instalado.' : 'Configura el número de renovación de GymFlow Mini.'))); };
   const expiry = formatDate(user.gym.subscriptionEndsAt);
   const actions: Array<{label:string;message:string}> = !plan
     ? [{ label:'Activar por WhatsApp', message:`Hola, quiero activar GymFlow Mini para el gimnasio ${user.gym.name}.` }]
@@ -305,8 +388,8 @@ function MembersScreen({ scope, revision, initialFilter }: ScreenProps & { initi
     </ScrollView>
     <MemberActions member={selected} onClose={() => setSelected(null)} onEdit={() => withActiveSubscription(() => { if (selected) setEditing(selected); setSelected(null); })} onPlan={() => withActiveSubscription(() => { if (selected) setAssigning(selected); setSelected(null); })} onRenew={() => withActiveSubscription(() => { if (selected) setRenewing(selected); setSelected(null); })} onEditScheduled={() => withActiveSubscription(() => { if (selected) setEditingScheduled(selected); setSelected(null); })} onDeleteScheduled={() => withActiveSubscription(() => { if (selected) confirmDeleteScheduled(selected); })} onDelete={() => withActiveSubscription(() => { if (selected) confirmDelete(selected); })} />
     <AssignPlanForm scope={scope} member={assigning} plans={plans} onClose={() => setAssigning(null)} onSaved={() => { setAssigning(null); load(); }} />
-    <RenewMembershipForm scope={scope} member={renewing} plans={plans} onClose={() => setRenewing(null)} onSaved={() => { setRenewing(null); load(); }} />
-    <ScheduledMembershipForm scope={scope} member={editingScheduled} plans={plans} onClose={() => setEditingScheduled(null)} onSaved={() => { setEditingScheduled(null); load(); }} />
+    {SHOW_SCHEDULED_MEMBERSHIP_UI ? <RenewMembershipForm scope={scope} member={renewing} plans={plans} onClose={() => setRenewing(null)} onSaved={() => { setRenewing(null); load(); }} /> : null}
+    {SHOW_SCHEDULED_MEMBERSHIP_UI ? <ScheduledMembershipForm scope={scope} member={editingScheduled} plans={plans} onClose={() => setEditingScheduled(null)} onSaved={() => { setEditingScheduled(null); load(); }} /> : null}
   </>;
 }
 
@@ -321,14 +404,14 @@ function MemberActions({ member, onClose, onEdit, onPlan, onRenew, onEditSchedul
       <View style={styles.memberProfileAvatar}><Text style={styles.memberProfileInitials}>{member ? `${member.firstName[0]}${member.lastName[0]}` : ''}</Text></View>
       <View style={styles.rowMain}><Text style={styles.memberProfileName}>{fullName}</Text><Text style={styles.memberProfileMeta}>CI {member?.ci}{member?.phone ? ` · ${member.phone}` : ''}</Text><Text style={[styles.memberProfilePlan,membership&&effectiveMembershipStatus(membership)==='EXPIRED'&&styles.memberPlanTextExpired]}>{membership ? `${membership.plan.name} · ${membershipStatusLabel(effectiveMembershipStatus(membership))}` : 'Sin membresía vigente'}</Text>{active?<Text style={styles.memberProfileExpiry}>Vence el {formatDate(active.endDate)} · {remainingDaysLabel(active.endDate)}</Text>:null}</View>
     </View>
-    {scheduled?<View style={styles.scheduledMembershipCard}>
+    {SHOW_SCHEDULED_MEMBERSHIP_UI&&scheduled?<View style={styles.scheduledMembershipCard}>
       <Text style={styles.scheduledMembershipLabel}>PRÓXIMA MEMBRESÍA · PROGRAMADA</Text><Text style={styles.scheduledMembershipPlan}>{scheduled.plan.name}</Text><Text style={styles.scheduledMembershipDates}>Inicia {formatDate(scheduled.startDate)} · vence {formatDate(scheduled.endDate)}</Text>
       <View style={styles.scheduledMembershipActions}><Pressable accessibilityRole="button" onPress={onEditScheduled} style={({pressed})=>[styles.scheduledMembershipButton,pressed&&styles.tabPressed]}><Ionicons name="create-outline" size={15} color={palette.action}/><Text style={styles.scheduledMembershipButtonText}>Editar</Text></Pressable><Pressable accessibilityRole="button" onPress={onDeleteScheduled} style={({pressed})=>[styles.scheduledMembershipButton,styles.scheduledMembershipDeleteButton,pressed&&styles.tabPressed]}><Ionicons name="trash-outline" size={15} color={palette.danger}/><Text style={[styles.scheduledMembershipButtonText,styles.memberActionDeleteText]}>Eliminar</Text></Pressable></View>
     </View>:null}
     <View style={styles.memberActionGrid}>
       <Pressable accessibilityRole="button" onPress={onEdit} style={({pressed})=>[styles.memberActionCard,pressed&&styles.memberActionCardPressed]}><View style={styles.memberActionIcon}><Text style={styles.memberActionIconText}>✎</Text></View><View style={styles.rowMain}><Text style={styles.memberActionTitle}>Editar datos</Text><Text style={styles.memberActionCopy}>Nombre, CI, teléfono, dirección y estado</Text></View><Text style={styles.memberActionChevron}>›</Text></Pressable>
-      <Pressable accessibilityRole="button" onPress={onPlan} style={({pressed})=>[styles.memberActionCard,styles.memberActionCardPlan,pressed&&styles.memberActionCardPressed]}><View style={[styles.memberActionIcon,styles.memberActionIconPlan]}><Text style={styles.memberActionIconText}>◆</Text></View><View style={styles.rowMain}><Text style={styles.memberActionTitle}>{editable?'Gestionar plan actual':'Asignar plan'}</Text><Text style={styles.memberActionCopy}>{editable?'Cambiar el plan o el estado de la membresía vigente':'Crear una nueva membresía para este miembro'}</Text></View><Text style={styles.memberActionChevron}>›</Text></Pressable>
-      {active&&!scheduled?<Pressable accessibilityRole="button" onPress={onRenew} style={({pressed})=>[styles.memberActionCard,styles.memberActionCardRenew,pressed&&styles.memberActionCardPressed]}><View style={[styles.memberActionIcon,styles.memberActionIconRenew]}><Ionicons name="calendar-outline" size={19} color={palette.warning}/></View><View style={styles.rowMain}><Text style={styles.memberActionTitle}>Programar renovación</Text><Text style={styles.memberActionCopy}>Elige el plan que comenzará cuando venza el actual</Text></View><Text style={styles.memberActionChevron}>›</Text></Pressable>:null}
+      <Pressable accessibilityRole="button" onPress={onPlan} style={({pressed})=>[styles.memberActionCard,styles.memberActionCardPlan,pressed&&styles.memberActionCardPressed]}><View style={[styles.memberActionIcon,styles.memberActionIconPlan]}><Text style={styles.memberActionIconText}>◆</Text></View><View style={styles.rowMain}><Text style={styles.memberActionTitle}>{active?'Gestionar membresía':'Asignar plan'}</Text><Text style={styles.memberActionCopy}>{active?'Puedes cancelarla; el plan no podrá cambiarse hasta que venza':'Crear una nueva membresía para este miembro'}</Text></View><Text style={styles.memberActionChevron}>›</Text></Pressable>
+      {SHOW_SCHEDULED_MEMBERSHIP_UI&&active&&!scheduled?<Pressable accessibilityRole="button" onPress={onRenew} style={({pressed})=>[styles.memberActionCard,styles.memberActionCardRenew,pressed&&styles.memberActionCardPressed]}><View style={[styles.memberActionIcon,styles.memberActionIconRenew]}><Ionicons name="calendar-outline" size={19} color={palette.warning}/></View><View style={styles.rowMain}><Text style={styles.memberActionTitle}>Programar renovación</Text><Text style={styles.memberActionCopy}>Elige el plan que comenzará cuando venza el actual</Text></View><Text style={styles.memberActionChevron}>›</Text></Pressable>:null}
       <Pressable accessibilityRole="button" accessibilityLabel="Eliminar miembro" onPress={onDelete} style={({pressed})=>[styles.memberActionCard,styles.memberActionCardDelete,pressed&&styles.memberActionCardPressed]}><View style={[styles.memberActionIcon,styles.memberActionIconDelete]}><Text style={[styles.memberActionIconText,styles.memberActionDeleteText]}>×</Text></View><View style={styles.rowMain}><Text style={[styles.memberActionTitle,styles.memberActionDeleteText]}>Eliminar miembro</Text><Text style={styles.memberActionCopy}>Elimina el registro o lo archiva si tiene historial</Text></View></Pressable>
     </View>
   </Sheet>;
@@ -338,7 +421,7 @@ function PlansScreen({ scope, revision }: ScreenProps) {
   const [plans, setPlans] = useState<Plan[]>([]); const [loading, setLoading] = useState(true); const [open, setOpen] = useState(false); const [selected, setSelected] = useState<Plan | null>(null); const [editing, setEditing] = useState<Plan | null>(null);
   const load = useCallback(() => { setLoading(true); offline.plans(scope).then(setPlans).catch(showError).finally(() => setLoading(false)); }, [scope]);
   const refresh = useCallback(() => { void syncNow(scope).then(load); }, [scope, load]);
-  const onlineAction = async (action: () => void) => { if (!subscriptionIsActive()) { Alert.alert('Membresía vencida', renewalMessage); return; } if (!await hasInternetConnection()) { showOnlineRequired(); return; } action(); };
+  const onlineAction = async (action: () => void) => { if (!subscriptionIsActive()) { showError(new Error(renewalMessage)); return; } if (!await hasInternetConnection()) { showOnlineRequired(); return; } action(); };
   const confirmDelete = (plan: Plan) => { void onlineAction(() => Alert.alert('Eliminar plan', `¿Deseas eliminar el plan ${plan.name}? No podrá eliminarse si tiene membresías activas.`, [{ text:'Cancelar', style:'cancel' }, { text:'Eliminar', style:'destructive', onPress:() => { void api.deletePlan(plan.id).then(() => syncNow(scope)).then(() => { setSelected(null); load(); }).catch(showError); } }])); };
   useEffect(load, [load, revision]);
   if (open || editing) return <PlanForm scope={scope} open plan={editing} onClose={() => { setOpen(false); setEditing(null); }} onSaved={() => { setOpen(false); setEditing(null); load(); }} />;
@@ -355,8 +438,9 @@ function PaymentsScreen({ scope, revision }: ScreenProps) {
   const load = useCallback(() => { setLoading(true); offline.payments(scope).then(setPayments).catch(showError).finally(() => setLoading(false)); }, [scope]);
   const refresh = useCallback(() => { void syncNow(scope).then(load); }, [scope, load]);
   useEffect(load, [load, revision]);
-  const years = Array.from(new Set([new Date().getFullYear(), ...payments.map(payment => paymentCreatedDate(payment)?.getFullYear()).filter((year): year is number => year !== undefined)])).sort((a,b) => b-a);
-  const filteredPayments = payments.filter(payment => { const date=paymentCreatedDate(payment); if (monthFilter === 'ALL' && yearFilter === 'ALL') return true; if (!date) return false; return (monthFilter === 'ALL' || date.getMonth() === monthFilter) && (yearFilter === 'ALL' || date.getFullYear() === yearFilter); });
+  const duePayments = payments.filter(payment => paymentIsDue(payment));
+  const years = Array.from(new Set([new Date().getFullYear(), ...duePayments.map(payment => paymentCreatedDate(payment)?.getFullYear()).filter((year): year is number => year !== undefined)])).sort((a,b) => b-a);
+  const filteredPayments = duePayments.filter(payment => { const date=paymentCreatedDate(payment); if (monthFilter === 'ALL' && yearFilter === 'ALL') return true; if (!date) return false; return (monthFilter === 'ALL' || date.getMonth() === monthFilter) && (yearFilter === 'ALL' || date.getFullYear() === yearFilter); });
   const period = paymentPeriodLabel(monthFilter, yearFilter);
   const debt = filteredPayments.reduce((sum, payment) => payment.status === 'CANCELLED' ? sum : sum + Math.max(0, Number(payment.amount) - Number(payment.paidAmount)), 0);
   const pendingCount = filteredPayments.filter(payment => payment.status !== 'CANCELLED' && Number(payment.amount) > Number(payment.paidAmount)).length;
@@ -373,7 +457,7 @@ function PaymentsScreen({ scope, revision }: ScreenProps) {
       const disabled = balance <= 0 || payment.status === 'CANCELLED';
       const progress = total > 0 ? Math.min(100, (paid / total) * 100) : 0;
       return <Pressable disabled={disabled} onPress={() => withActiveSubscription(() => setSelected(payment))} key={payment.id} style={({pressed}) => [styles.paymentDetailRow, pressed && styles.paymentDetailRowPressed]}>
-        <View style={styles.paymentDetailHead}><View style={styles.rowMain}><Text style={styles.rowTitle}>{payment.member.firstName} {payment.member.lastName}</Text><Text style={styles.rowSubtitle}>{payment.membership.plan.name}</Text></View><View style={[styles.paymentBadge, status.tone === 'success' && styles.paymentBadgeSuccess, status.tone === 'danger' && styles.paymentBadgeDanger]}><Text style={[styles.paymentBadgeText, status.tone === 'success' && styles.paymentBadgeTextSuccess, status.tone === 'danger' && styles.paymentBadgeTextDanger]}>{status.label}</Text></View></View>
+        <View style={styles.paymentDetailHead}><View style={styles.rowMain}><Text style={styles.rowTitle}>{payment.member.firstName} {payment.member.lastName}</Text><Text style={styles.rowSubtitle}>{payment.membership.plan.name}{(payment.membership.periodCount ?? 1) > 1 ? ` · ${payment.membership.periodCount} períodos` : ''}</Text></View><View style={[styles.paymentBadge, status.tone === 'success' && styles.paymentBadgeSuccess, status.tone === 'danger' && styles.paymentBadgeDanger]}><Text style={[styles.paymentBadgeText, status.tone === 'success' && styles.paymentBadgeTextSuccess, status.tone === 'danger' && styles.paymentBadgeTextDanger]}>{status.label}</Text></View></View>
         <View style={styles.paymentAmounts}><View><Text style={styles.paymentAmountLabel}>PAGADO</Text><Text style={styles.paymentPaid}>{money(paid)}</Text></View><View><Text style={[styles.paymentAmountLabel, styles.paymentAmountRight]}>TOTAL</Text><Text style={styles.paymentTotal}>{money(total)}</Text></View></View>
         <View style={styles.paymentProgress}><View style={[styles.paymentProgressFill, { width: `${progress}%` }]} /></View>
         {payment.movements.length ? <View style={styles.paymentOperations}><Text style={styles.paymentOperationsTitle}>OPERACIONES</Text>{payment.movements.map(movement => <View key={movement.id} style={styles.paymentOperation}><Text style={styles.paymentOperationAmount}>Abono {money(movement.amount)}</Text><Text style={styles.paymentOperationDate}>{formatDateTime(movement.occurredAt)}</Text></View>)}</View> : <Text style={styles.paymentNoOperations}>Sin operaciones registradas</Text>}
@@ -385,11 +469,13 @@ function PaymentsScreen({ scope, revision }: ScreenProps) {
 
 function MemberForm({ scope, open, member, plans, onClose, onSaved }: FormProps & { member: Member | null; plans: Plan[] }) {
   const [ci, setCi] = useState(''); const [code, setCode] = useState(''); const [firstName, setFirstName] = useState(''); const [lastName, setLastName] = useState(''); const [age, setAge] = useState(''); const [sex, setSex] = useState<MemberSex | ''>(''); const [phone, setPhone] = useState(''); const [address, setAddress] = useState(''); const [status, setStatus] = useState('ACTIVE'); const [saving, setSaving] = useState(false);
-  const [page, setPage] = useState(0); const [planId, setPlanId] = useState('');
+  const [page, setPage] = useState(0); const [planId, setPlanId] = useState(''); const [periodCount, setPeriodCount] = useState<MembershipPeriodCount>(1); const [initialPayment, setInitialPayment] = useState('');
   const availablePlans = plans.filter(plan => plan.isActive);
+  const selectedInitialPlan = availablePlans.find(plan => plan.id === planId);
+  const initialEndDate = selectedInitialPlan ? addDays(new Date().toISOString(), selectedInitialPlan.durationDays * periodCount) : undefined;
   const totalPages = member ? 4 : 5;
-  useEffect(() => { if (!open) return; setPage(0); setPlanId(''); setCi(member?.ci ?? ''); setCode(member?.code ?? ''); setFirstName(member?.firstName ?? ''); setLastName(member?.lastName ?? ''); setAge(member?.age ? String(member.age) : ''); setSex(member?.sex ?? ''); setPhone(member?.phone ?? ''); setAddress(member?.address ?? ''); setStatus(member?.status ?? 'ACTIVE'); }, [open, member]);
-  const save = async () => { setSaving(true); try { ensureActiveSubscription(); const input = { ci, code: code.trim() || null, firstName: firstName.trim(), lastName: lastName.trim(), age: age ? Number(age) : null, sex: sex || null, phone: phone.trim(), address: address.trim() }; if (member) await offline.updateMember(scope, member.id, { ...input, status }); else { if (!planId) throw new Error('Selecciona el plan inicial'); await offline.createMember(scope, input); await syncNow(scope); const createdMember=(await offline.members(scope)).find(item => item.ci === ci); if (!createdMember) throw new Error('No se pudo encontrar el miembro recién creado'); await offline.assignPlan(scope, { memberId:createdMember.id, planId }); } Keyboard.dismiss(); onSaved(); } catch (error) { showError(error); } finally { setSaving(false); } };
+  useEffect(() => { if (!open) return; setPage(0); setPlanId(''); setPeriodCount(1); setInitialPayment(''); setCi(member?.ci ?? ''); setCode(member?.code ?? ''); setFirstName(member?.firstName ?? ''); setLastName(member?.lastName ?? ''); setAge(member?.age ? String(member.age) : ''); setSex(member?.sex ?? ''); setPhone(member?.phone ?? ''); setAddress(member?.address ?? ''); setStatus(member?.status ?? 'ACTIVE'); }, [open, member]);
+  const save = async () => { setSaving(true); try { ensureActiveSubscription(); const input = { ci, code: code.trim() || null, firstName: firstName.trim(), lastName: lastName.trim(), age: age ? Number(age) : null, sex: sex || null, phone: phone.trim(), address: address.trim() }; if (member) await offline.updateMember(scope, member.id, { ...input, status }); else { if (!planId) throw new Error('Selecciona el plan inicial'); await offline.createMember(scope, input); await syncNow(scope); const createdMember=(await offline.members(scope)).find(item => item.ci === ci); if (!createdMember) throw new Error('No se pudo encontrar el miembro recién creado'); await offline.assignPlan(scope, { memberId:createdMember.id, planId, periodCount, ...(Number(initialPayment)>0?{initialPayment:Number(initialPayment),paymentMethod:'CASH'}:{}) }); } Keyboard.dismiss(); onSaved(); } catch (error) { showError(error); } finally { setSaving(false); } };
   const validAge = !age || (Number.isInteger(Number(age)) && Number(age) >= 1 && Number(age) <= 120);
   const pageValid = [!!firstName.trim() && !!lastName.trim(), ci.length === 11, validAge, true, !!planId][page];
   const pageTitles = ['Datos personales', 'Identificación', 'Información adicional', 'Contacto y estado', 'Plan inicial'];
@@ -402,7 +488,7 @@ function MemberForm({ scope, open, member, plans, onClose, onSaved }: FormProps 
       {page === 1 ? <><Field label="Carnet de identidad (11 dígitos)" value={ci} onChangeText={(value) => setCi(value.replace(/\D/g, '').slice(0, 11))} keyboardType="number-pad" maxLength={11} /><Field label="Código interno (opcional)" value={code} onChangeText={(value) => setCode(value.slice(0, 40))} maxLength={40} /></> : null}
       {page === 2 ? <><Field label="Edad (opcional)" value={age} onChangeText={(value) => setAge(value.replace(/\D/g, '').slice(0, 3))} keyboardType="number-pad" maxLength={3} /><Text style={styles.fieldLabel}>Sexo (opcional)</Text><View style={styles.statusChoices}>{([['MALE','Masculino'],['FEMALE','Femenino'],['OTHER','Otro']] as Array<[MemberSex,string]>).map(([value,label]) => <Pressable key={value} onPress={() => setSex(sex === value ? '' : value)} style={[styles.statusChoice, sex === value && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, sex === value && styles.statusChoiceTextActive]}>{label}</Text></Pressable>)}</View></> : null}
       {page === 3 ? <><Field label="Teléfono" value={phone} onChangeText={setPhone} keyboardType="phone-pad" /><Field label="Dirección" value={address} onChangeText={setAddress} />{member && <><Text style={styles.fieldLabel}>Estado</Text><View style={styles.statusChoices}><Pressable onPress={() => setStatus('ACTIVE')} style={[styles.statusChoice, status === 'ACTIVE' && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, status === 'ACTIVE' && styles.statusChoiceTextActive]}>Activo</Text></Pressable><Pressable onPress={() => setStatus('INACTIVE')} style={[styles.statusChoice, status === 'INACTIVE' && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, status === 'INACTIVE' && styles.statusChoiceTextActive]}>Inactivo</Text></Pressable></View></>}</> : null}
-      {page === 4 && !member ? <>{availablePlans.length ? <View style={styles.choices}>{availablePlans.map(plan => <Pressable accessibilityRole="radio" accessibilityState={{checked:planId===plan.id}} key={plan.id} onPress={() => setPlanId(plan.id)} style={[styles.choice,planId===plan.id&&styles.choiceActive]}><Text style={styles.choiceTitle}>{plan.name}</Text><Text style={styles.choicePrice}>{money(plan.price)} · {plan.durationDays} días</Text></Pressable>)}</View> : <View style={styles.planRequiredEmpty}><Ionicons name="alert-circle-outline" size={26} color={palette.warning}/><Text style={styles.planRequiredTitle}>No hay planes activos</Text><Text style={styles.planRequiredCopy}>Vuelve a Planes, crea o activa un plan y después registra el miembro.</Text></View>}</> : null}
+      {page === 4 && !member ? <>{availablePlans.length ? <><View style={styles.choices}>{availablePlans.map(plan => <Pressable accessibilityRole="radio" accessibilityState={{checked:planId===plan.id}} key={plan.id} onPress={() => setPlanId(plan.id)} style={[styles.choice,planId===plan.id&&styles.choiceActive]}><Text style={styles.choiceTitle}>{plan.name}</Text><Text style={styles.choicePrice}>{money(plan.price)} · {plan.durationDays} días</Text></Pressable>)}</View><PeriodSelector value={periodCount} onChange={setPeriodCount}/>{selectedInitialPlan?<MembershipPurchasePreview plan={selectedInitialPlan} periodCount={periodCount} endDate={initialEndDate}/>:null}<Field label="Pago inicial en efectivo (opcional)" value={initialPayment} onChangeText={setInitialPayment} keyboardType="numeric" /></> : <View style={styles.planRequiredEmpty}><Ionicons name="alert-circle-outline" size={26} color={palette.warning}/><Text style={styles.planRequiredTitle}>No hay planes activos</Text><Text style={styles.planRequiredCopy}>Vuelve a Planes, crea o activa un plan y después registra el miembro.</Text></View>}</> : null}
     </ScrollView>
   </View>;
 }
@@ -430,34 +516,35 @@ function PlanForm({ scope, open, plan, onClose, onSaved }: FormProps & { plan: P
 
 function AssignPlanForm({ scope, member, plans, onClose, onSaved }: { scope: string; member: Member | null; plans: Plan[]; onClose: () => void; onSaved: () => void }) {
   const membership = member ? editableMembership(member) : undefined;
-  const availablePlans = plans.filter(plan => plan.isActive || plan.id === membership?.plan.id);
-  const [planId, setPlanId] = useState(''); const [amount, setAmount] = useState(''); const [status, setStatus] = useState('ACTIVE'); const [saving, setSaving] = useState(false);
-  useEffect(() => { setPlanId(membership?.plan.id ?? availablePlans.find(plan => plan.isActive)?.id ?? ''); setStatus(membership?.status ?? 'ACTIVE'); setAmount(''); }, [member, membership?.id, membership?.plan.id, membership?.status, plans]);
+  const membershipLocked = !!membership && effectiveMembershipStatus(membership) === 'ACTIVE';
+  const availablePlans = plans.filter(plan => membershipLocked ? plan.id === membership.plan.id : plan.isActive || plan.id === membership?.plan.id);
+  const [planId, setPlanId] = useState(''); const [periodCount, setPeriodCount] = useState<MembershipPeriodCount>(1); const [amount, setAmount] = useState(''); const [status, setStatus] = useState('ACTIVE'); const [saving, setSaving] = useState(false);
+  useEffect(() => { setPlanId(membership?.plan.id ?? availablePlans.find(plan => plan.isActive)?.id ?? ''); setPeriodCount(1); setStatus(membership?.status ?? 'ACTIVE'); setAmount(''); }, [member, membership?.id, membership?.plan.id, membership?.status, plans]);
   const selectedPlan = availablePlans.find(plan => plan.id === planId);
-  const previewEndDate = membership ? selectedPlan && selectedPlan.id !== membership.plan.id ? new Date(new Date(membership.startDate).getTime() + selectedPlan.durationDays * 86_400_000).toISOString() : membership.endDate : undefined;
-  const save = async () => { if (!member || !planId) return; setSaving(true); try { ensureActiveSubscription(); if (membership) await offline.updateMembership(scope, member.id, membership.id, { planId, status }); else await offline.assignPlan(scope, { memberId: member.id, planId, ...(Number(amount) > 0 ? { initialPayment: Number(amount), paymentMethod: 'CASH' } : {}) }); onSaved(); } catch (error) { showError(error); } finally { setSaving(false); } };
+  const previewEndDate = membership ? membership.endDate : selectedPlan ? addDays(new Date().toISOString(), selectedPlan.durationDays * periodCount) : undefined;
+  const save = async () => { if (!member || !planId) return; setSaving(true); try { ensureActiveSubscription(); if (membership) await offline.updateMembership(scope, member.id, membership.id, { planId, status }); else await offline.assignPlan(scope, { memberId: member.id, planId, periodCount, ...(Number(amount) > 0 ? { initialPayment: Number(amount), paymentMethod: 'CASH' } : {}) }); onSaved(); } catch (error) { showError(error); } finally { setSaving(false); } };
   return <Sheet open={!!member} title={`${membership ? 'Editar membresía' : 'Plan'} de ${member?.firstName ?? ''}`} onClose={onClose} footer={<PrimaryButton label={saving ? "Guardando…" : membership ? "Guardar cambios" : "Asignar plan"} disabled={saving || !planId} onPress={() => void save()} />}>
-    {membership && <><View style={styles.currentPlanCard}><Text style={styles.currentMembershipLabel}>PLAN ACTUAL</Text><Text style={styles.currentPlanName}>{membership.plan.name}</Text><Text style={styles.currentPlanMeta}>{money(membership.plan.price)} · {membership.plan.durationDays} días · {membershipStatusLabel(effectiveMembershipStatus(membership))}</Text><Text style={styles.currentPlanMeta}>Desde {formatDate(membership.startDate)} · vence {formatDate(membership.endDate)}</Text></View><View style={styles.membershipExpiryPreview}><View><Text style={styles.membershipExpiryLabel}>{selectedPlan?.id!==membership.plan.id?'NUEVO VENCIMIENTO':'FECHA DE VENCIMIENTO'}</Text><Text style={styles.membershipExpiryDate}>{previewEndDate?formatDate(previewEndDate):'—'}</Text></View><Text style={styles.membershipExpiryDays}>{previewEndDate?remainingDaysLabel(previewEndDate):'—'}</Text></View></>}
-    <Text style={styles.fieldLabel}>Selecciona el plan</Text><View style={styles.choices}>{availablePlans.map(plan => <Pressable key={plan.id} onPress={() => setPlanId(plan.id)} style={[styles.choice, planId === plan.id && styles.choiceActive]}><Text style={styles.choiceTitle}>{plan.name}{plan.id === membership?.plan.id ? ' · Actual' : ''}</Text><Text style={styles.choicePrice}>{money(plan.price)}</Text></Pressable>)}</View>
-    {membership ? <><Text style={styles.fieldLabel}>Estado de la membresía</Text><View style={styles.statusChoices}>{['ACTIVE','EXPIRED','CANCELLED'].map(value=><Pressable key={value} onPress={() => setStatus(value)} style={[styles.statusChoice, status === value && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, status === value && styles.statusChoiceTextActive]}>{membershipStatusLabel(value)}</Text></Pressable>)}</View></> : <Field label="Abono inicial (opcional)" value={amount} onChangeText={setAmount} keyboardType="numeric" />}
+    {membership && <><View style={styles.currentPlanCard}><Text style={styles.currentMembershipLabel}>PLAN ACTUAL</Text><Text style={styles.currentPlanName}>{membership.plan.name}</Text><Text style={styles.currentPlanMeta}>{money(Number(membership.plan.price) * (membership.periodCount ?? 1))} · {membership.plan.durationDays * (membership.periodCount ?? 1)} días · {membershipStatusLabel(effectiveMembershipStatus(membership))}</Text><Text style={styles.currentPlanMeta}>Desde {formatDate(membership.startDate)} · vence {formatDate(membership.endDate)}</Text></View><View style={styles.membershipExpiryPreview}><View><Text style={styles.membershipExpiryLabel}>{selectedPlan?.id!==membership.plan.id?'NUEVO VENCIMIENTO':'FECHA DE VENCIMIENTO'}</Text><Text style={styles.membershipExpiryDate}>{previewEndDate?formatDate(previewEndDate):'—'}</Text></View><Text style={styles.membershipExpiryDays}>{previewEndDate?remainingDaysLabel(previewEndDate):'—'}</Text></View></>}
+    <Text style={styles.fieldLabel}>{membershipLocked?'Plan de la membresía':'Selecciona el plan'}</Text><View style={styles.choices}>{availablePlans.map(plan => <Pressable disabled={membershipLocked} key={plan.id} onPress={() => setPlanId(plan.id)} style={[styles.choice, planId === plan.id && styles.choiceActive]}><Text style={styles.choiceTitle}>{plan.name}{plan.id === membership?.plan.id ? ' · Actual' : ''}</Text><Text style={styles.choicePrice}>{money(plan.price)}</Text></Pressable>)}</View>
+    {membership ? <><Text style={styles.fieldLabel}>Estado de la membresía</Text><View style={styles.statusChoices}>{['ACTIVE','CANCELLED'].map(value=><Pressable key={value} onPress={() => setStatus(value)} style={[styles.statusChoice, status === value && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, status === value && styles.statusChoiceTextActive]}>{membershipStatusLabel(value)}</Text></Pressable>)}</View></> : <><PeriodSelector value={periodCount} onChange={setPeriodCount}/>{selectedPlan?<MembershipPurchasePreview plan={selectedPlan} periodCount={periodCount} endDate={previewEndDate}/>:null}<Field label="Abono inicial (opcional)" value={amount} onChangeText={setAmount} keyboardType="numeric" /></>}
   </Sheet>;
 }
 
 function RenewMembershipForm({ scope, member, plans, onClose, onSaved }: { scope: string; member: Member | null; plans: Plan[]; onClose: () => void; onSaved: () => void }) {
   const current = member ? activeMembership(member) : undefined;
   const availablePlans = plans.filter(plan => plan.isActive);
-  const [planId, setPlanId] = useState(''); const [amount, setAmount] = useState(''); const [saving, setSaving] = useState(false);
-  useEffect(() => { setPlanId(current && availablePlans.some(plan => plan.id===current.plan.id) ? current.plan.id : availablePlans[0]?.id ?? ''); setAmount(''); }, [member, current?.id, current?.plan.id, plans]);
+  const [planId, setPlanId] = useState(''); const [periodCount, setPeriodCount] = useState<MembershipPeriodCount>(1); const [amount, setAmount] = useState(''); const [saving, setSaving] = useState(false);
+  useEffect(() => { setPlanId(current && availablePlans.some(plan => plan.id===current.plan.id) ? current.plan.id : availablePlans[0]?.id ?? ''); setPeriodCount(1); setAmount(''); }, [member, current?.id, current?.plan.id, plans]);
   const selectedPlan = availablePlans.find(plan => plan.id===planId);
   const startDate = current?.endDate;
-  const endDate = startDate&&selectedPlan ? addDays(startDate,selectedPlan.durationDays) : undefined;
-  const save = async () => { if (!member || !current || !planId) return; setSaving(true); try { ensureActiveSubscription(); await offline.renewMembership(scope,member.id,current.id,{ planId, ...(Number(amount)>0?{initialPayment:Number(amount),paymentMethod:'CASH'}:{}) }); onSaved(); } catch(error) { showError(error); } finally { setSaving(false); } };
+  const endDate = startDate&&selectedPlan ? addDays(startDate,selectedPlan.durationDays * periodCount) : undefined;
+  const save = async () => { if (!member || !current || !planId) return; setSaving(true); try { ensureActiveSubscription(); await offline.renewMembership(scope,member.id,current.id,{ planId, periodCount, ...(Number(amount)>0?{initialPayment:Number(amount),paymentMethod:'CASH'}:{}) }); onSaved(); } catch(error) { showError(error); } finally { setSaving(false); } };
   return <Sheet open={!!member} title={`Programar renovación de ${member?.firstName ?? ''}`} onClose={onClose} footer={<PrimaryButton label={saving?'Programando…':'Programar renovación'} disabled={saving||!planId||!current} onPress={() => void save()}/>}>
     {current?<View style={styles.currentPlanCard}><Text style={styles.currentMembershipLabel}>PLAN ACTUAL</Text><Text style={styles.currentPlanName}>{current.plan.name}</Text><Text style={styles.currentPlanMeta}>{money(current.plan.price)} · {current.plan.durationDays} días · Activa</Text><Text style={styles.currentPlanMeta}>Desde {formatDate(current.startDate)} · vence {formatDate(current.endDate)}</Text></View>:null}
     <Text style={styles.sheetCopy}>La membresía actual continuará activa hasta su vencimiento.</Text>
-    <View style={styles.membershipExpiryPreview}><View><Text style={styles.membershipExpiryLabel}>PRÓXIMO PERÍODO</Text><Text style={styles.membershipExpiryDate}>{startDate?`Inicia ${formatDate(startDate)}`:'—'}</Text><Text style={styles.scheduledMembershipDates}>{endDate?`Vence ${formatDate(endDate)}`:'Selecciona un plan'}</Text></View><Text style={styles.membershipExpiryDays}>{selectedPlan?`${selectedPlan.durationDays} días`:'—'}</Text></View>
+    <View style={styles.membershipExpiryPreview}><View><Text style={styles.membershipExpiryLabel}>PRÓXIMO PERÍODO</Text><Text style={styles.membershipExpiryDate}>{startDate?`Inicia ${formatDate(startDate)}`:'—'}</Text><Text style={styles.scheduledMembershipDates}>{endDate?`Vence ${formatDate(endDate)}`:'Selecciona un plan'}</Text></View><Text style={styles.membershipExpiryDays}>{selectedPlan?`${selectedPlan.durationDays * periodCount} días`:'—'}</Text></View>
     <Text style={styles.fieldLabel}>Plan de la renovación</Text><View style={styles.choices}>{availablePlans.map(plan=><Pressable key={plan.id} onPress={()=>setPlanId(plan.id)} style={[styles.choice,planId===plan.id&&styles.choiceActive]}><Text style={styles.choiceTitle}>{plan.name}{plan.id===current?.plan.id?' · Mismo plan':''}</Text><Text style={styles.choicePrice}>{money(plan.price)} · {plan.durationDays} días</Text></Pressable>)}</View>
-    <Field label="Abono inicial (opcional)" value={amount} onChangeText={setAmount} keyboardType="numeric" />
+    <PeriodSelector value={periodCount} onChange={setPeriodCount}/>{selectedPlan?<MembershipPurchasePreview plan={selectedPlan} periodCount={periodCount} endDate={endDate}/>:null}<Field label="Abono inicial (opcional)" value={amount} onChangeText={setAmount} keyboardType="numeric" />
   </Sheet>;
 }
 
@@ -467,10 +554,10 @@ function ScheduledMembershipForm({ scope, member, plans, onClose, onSaved }: { s
   const [planId,setPlanId] = useState(''); const [saving,setSaving] = useState(false);
   useEffect(()=>setPlanId(scheduled?.plan.id ?? ''),[member,scheduled?.id,scheduled?.plan.id]);
   const selectedPlan=availablePlans.find(plan=>plan.id===planId);
-  const previewEndDate=scheduled&&selectedPlan?addDays(scheduled.startDate,selectedPlan.durationDays):undefined;
+  const previewEndDate=scheduled&&selectedPlan?addDays(scheduled.startDate,selectedPlan.durationDays * (scheduled.periodCount ?? 1)):undefined;
   const save=async()=>{ if(!member||!scheduled||!planId)return; setSaving(true); try { ensureActiveSubscription(); await offline.updateMembership(scope,member.id,scheduled.id,{planId,status:'SCHEDULED'}); onSaved(); } catch(error) { showError(error); } finally { setSaving(false); } };
   return <Sheet open={!!member} title="Editar renovación programada" onClose={onClose} footer={<PrimaryButton label={saving?'Guardando…':'Guardar cambios'} disabled={saving||!planId||!scheduled} onPress={()=>void save()}/>}>
-    <View style={styles.membershipExpiryPreview}><View><Text style={styles.membershipExpiryLabel}>PERÍODO PROGRAMADO</Text><Text style={styles.membershipExpiryDate}>{scheduled?`Inicia ${formatDate(scheduled.startDate)}`:'—'}</Text><Text style={styles.scheduledMembershipDates}>{previewEndDate?`Vence ${formatDate(previewEndDate)}`:'—'}</Text></View><Text style={styles.membershipExpiryDays}>{selectedPlan?`${selectedPlan.durationDays} días`:'—'}</Text></View>
+    <View style={styles.membershipExpiryPreview}><View><Text style={styles.membershipExpiryLabel}>PERÍODO PROGRAMADO</Text><Text style={styles.membershipExpiryDate}>{scheduled?`Inicia ${formatDate(scheduled.startDate)}`:'—'}</Text><Text style={styles.scheduledMembershipDates}>{previewEndDate?`Vence ${formatDate(previewEndDate)}`:'—'}</Text></View><Text style={styles.membershipExpiryDays}>{selectedPlan?`${selectedPlan.durationDays * (scheduled?.periodCount ?? 1)} días`:'—'}</Text></View>
     <Text style={styles.fieldLabel}>Plan programado</Text><View style={styles.choices}>{availablePlans.map(plan=><Pressable key={plan.id} onPress={()=>setPlanId(plan.id)} style={[styles.choice,planId===plan.id&&styles.choiceActive]}><Text style={styles.choiceTitle}>{plan.name}{plan.id===scheduled?.plan.id?' · Actual':''}</Text><Text style={styles.choicePrice}>{money(plan.price)} · {plan.durationDays} días</Text></Pressable>)}</View>
   </Sheet>;
 }
@@ -552,6 +639,7 @@ function Sheet({ open, title, onClose, children, footer }: { open: boolean; titl
       </Animated.View>
       </KeyboardAvoidingView>
     </View>
+    <ErrorToastHost active={mounted} priority={1} />
   </Modal>;
 }
 const keyboardFixStyles = StyleSheet.create({
@@ -563,13 +651,15 @@ const keyboardFixStyles = StyleSheet.create({
 function Field(props: React.ComponentProps<typeof TextInput> & { label: string }) { const revealFocusedInput = useContext(KeyboardScrollContext); const { label, onFocus, ...input } = props; return <View style={styles.field}><Text style={styles.fieldLabel}>{label}</Text><TextInput placeholderTextColor={activeDarkTheme ? '#aab7b0' : '#657169'} style={styles.input} {...input} onFocus={(event) => { onFocus?.(event); revealFocusedInput?.(event.nativeEvent.target); }} /></View>; }
 function PrimaryButton({ label, onPress, disabled }: { label: string; onPress: () => void; disabled?: boolean }) { return <Pressable onPress={onPress} disabled={disabled} style={[styles.primary, disabled && styles.disabled]}><Text style={styles.primaryText}>{label}</Text></Pressable>; }
 function FilterChip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) { return <Pressable accessibilityRole="button" accessibilityState={{selected:active}} onPress={onPress} style={[styles.paymentFilterChip,active&&styles.paymentFilterChipActive]}><Text style={[styles.paymentFilterChipText,active&&styles.paymentFilterChipTextActive]}>{label}</Text></Pressable>; }
+function PeriodSelector({ value, onChange }: { value: MembershipPeriodCount; onChange: (value: MembershipPeriodCount) => void }) { return <><Text style={styles.fieldLabel}>Períodos a pagar</Text><View style={styles.periodChoices}>{membershipPeriodOptions.map(period => <Pressable accessibilityRole="radio" accessibilityState={{checked:value===period}} key={period} onPress={() => onChange(period)} style={[styles.periodChoice,value===period&&styles.periodChoiceActive]}><Text style={[styles.periodChoiceText,value===period&&styles.periodChoiceTextActive]}>{period}</Text></Pressable>)}</View></>; }
+function MembershipPurchasePreview({ plan, periodCount, endDate }: { plan: Plan; periodCount: MembershipPeriodCount; endDate?: string }) { return <View style={styles.purchasePreview}><View><Text style={styles.purchasePreviewLabel}>TOTAL</Text><Text style={styles.purchasePreviewValue}>{money(Number(plan.price) * periodCount)}</Text><Text style={styles.purchasePreviewMeta}>{plan.durationDays * periodCount} días · {periodCount} período{periodCount===1?'':'s'}</Text></View><View><Text style={[styles.purchasePreviewLabel,styles.paymentAmountRight]}>VENCIMIENTO</Text><Text style={styles.purchasePreviewDate}>{endDate?formatDate(endDate):'—'}</Text></View></View>; }
 function Metric({ label, value, wide }: { label: string; value: string | number; wide?: boolean }) { return <View style={[styles.metric, wide && styles.metricWide]}><Text style={styles.metricLabel}>{label}</Text><Text style={styles.metricValue}>{value}</Text></View>; }
 function SectionTitle({ title, subtitle }: { title: string; subtitle: string }) { return <View style={styles.sectionTitle}><Text style={styles.sectionHeading}>{title}</Text><Text style={styles.sectionCopy}>{subtitle}</Text></View>; }
 function Row({ title, subtitle, value }: { title: string; subtitle: string; value: string }) { return <View style={styles.paymentRow}><View style={styles.rowMain}><Text style={styles.rowTitle}>{title}</Text><Text style={styles.rowSubtitle}>{subtitle}</Text></View><Text style={styles.income}>{value}</Text></View>; }
 function Empty({ text }: { text: string }) { return <Text style={styles.empty}>{text}</Text>; }
-function showError(error: unknown) { Alert.alert('Atención', error instanceof Error ? error.message : 'Ocurrió un error'); }
+function showError(error: unknown) { publishErrorToast(error instanceof Error ? error.message : typeof error === 'string' ? error : 'Ocurrió un error'); }
 async function hasInternetConnection() { const state=await Network.getNetworkStateAsync().catch(() => null); return state?.isConnected !== false; }
-function showOnlineRequired() { Alert.alert('Conexión requerida', 'Debes conectarte a internet para crear, editar o eliminar planes.'); }
+function showOnlineRequired() { showError(new Error('Debes conectarte a internet para crear, editar o eliminar planes.')); }
 function effectiveMembershipStatus(membership: Membership) { const now=Date.now(); if ((membership.status === 'ACTIVE' || membership.status === 'SCHEDULED') && new Date(membership.endDate).getTime() < now) return 'EXPIRED'; if (membership.status === 'SCHEDULED' && new Date(membership.startDate).getTime() <= now) return 'ACTIVE'; return membership.status; }
 function activeMembership(member: Member) { return member.memberships.find(membership => effectiveMembershipStatus(membership) === 'ACTIVE'); }
 function scheduledMembership(member: Member) { return member.memberships.find(membership => membership.status === 'SCHEDULED' && new Date(membership.startDate).getTime() > Date.now()); }
@@ -598,6 +688,7 @@ const palette = {
 
 const baseStyles = StyleSheet.create({
   center:{flex:1,alignItems:'center',justifyContent:'center',backgroundColor:palette.brand},app:{flex:1,backgroundColor:palette.background},content:{flex:1},
+  errorToastLayer:{...StyleSheet.absoluteFillObject,zIndex:1000,elevation:30},errorToast:{position:'absolute',top:Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) + 10 : 54,left:14,right:14,minHeight:70,padding:13,flexDirection:'row',alignItems:'flex-start',gap:10,borderWidth:1,borderColor:'#f8b4ad',borderRadius:15,backgroundColor:'#b42318',shadowColor:'#7a1710',shadowOffset:{width:0,height:6},shadowOpacity:.3,shadowRadius:12,elevation:24},errorToastBody:{flex:1},errorToastTitle:{color:'#fff',fontSize:12,fontWeight:'900'},errorToastMessage:{marginTop:3,color:'#ffe9e7',fontSize:10,lineHeight:15,fontWeight:'600'},errorToastClose:{width:28,height:28,alignItems:'center',justifyContent:'center',borderRadius:9,backgroundColor:'#ffffff1f'},
   loginPage:{flex:1,backgroundColor:palette.brand,paddingHorizontal:24,paddingTop:70},loginKeyboardAvoiding:{flex:1},loginScroll:{flexGrow:1},logo:{width:64,height:64,borderRadius:18},loginBrand:{marginTop:16,color:palette.white,fontSize:22,fontWeight:'800'},mini:{color:palette.accent,fontSize:11,letterSpacing:2},loginTitle:{marginTop:44,color:palette.white,fontSize:34,fontWeight:'800',letterSpacing:-1.2},loginCopy:{marginTop:10,color:'#c4d5cd',fontSize:15,lineHeight:22},loginCard:{marginTop:34,padding:20,borderRadius:20,backgroundColor:palette.white},version:{marginTop:'auto',marginBottom:24,textAlign:'center',color:'#a9c3b7',fontSize:10,letterSpacing:2},
   topbar:{paddingTop:18,paddingHorizontal:20,paddingBottom:14,flexDirection:'row',alignItems:'center',justifyContent:'space-between',backgroundColor:palette.background},kicker:{color:palette.action,fontSize:9,fontWeight:'800',letterSpacing:1.5},screenTitle:{marginTop:3,fontSize:27,fontWeight:'800',color:palette.ink,letterSpacing:-.8},avatar:{width:39,height:39,borderRadius:20,alignItems:'center',justifyContent:'center',backgroundColor:palette.accent},
   syncBar:{minHeight:44,marginHorizontal:16,marginBottom:4,paddingHorizontal:12,flexDirection:'row',alignItems:'center',gap:9,borderRadius:12,backgroundColor:'#e8f5ce'},syncOffline:{backgroundColor:'#fff4e8'},syncError:{backgroundColor:'#fee9e5'},syncDot:{width:9,height:9,borderRadius:5,backgroundColor:palette.warning},syncDotOk:{backgroundColor:palette.action},syncMain:{flex:1},syncTitle:{color:palette.ink,fontSize:11,fontWeight:'800'},syncDetail:{marginTop:1,color:palette.secondary,fontSize:9},syncAction:{color:palette.action,fontSize:10,fontWeight:'800'},
@@ -618,6 +709,7 @@ const baseStyles = StyleSheet.create({
   issueCard:{marginBottom:10,padding:14,borderWidth:1,borderColor:'#ead7d2',borderRadius:13,backgroundColor:'#fff8f6'},issueTitle:{color:palette.ink,fontSize:13,fontWeight:'800'},issueDate:{marginTop:3,color:palette.secondary,fontSize:9},issueError:{marginTop:9,color:palette.danger,fontSize:11,lineHeight:16},discard:{marginTop:12,color:palette.action,fontSize:11,fontWeight:'800'},
   tabbar:{marginHorizontal:12,marginBottom:8,paddingTop:7,paddingBottom:9,flexDirection:'row',borderWidth:1,borderColor:palette.line,borderRadius:22,backgroundColor:palette.white,shadowColor:palette.brand,shadowOffset:{width:0,height:4},shadowOpacity:.14,shadowRadius:10,elevation:8},tab:{flex:1,alignItems:'center'},tabPressed:{opacity:.65},tabIconWrap:{width:43,height:30,alignItems:'center',justifyContent:'center'},tabIconWrapActive:{overflow:'hidden',borderRadius:15,backgroundColor:'#e8f5ce'},tabLabel:{marginTop:2,color:palette.secondary,fontSize:9,fontWeight:'700'},tabActive:{color:palette.action,fontWeight:'900'},
   currentPlanCard:{marginBottom:14,padding:14,borderWidth:1,borderColor:'#cfe3d6',borderRadius:13,backgroundColor:'#f4faf6'},currentMembershipLabel:{marginTop:6,color:palette.secondary,fontSize:8,fontWeight:'900',letterSpacing:.8},currentPlanName:{marginTop:5,color:palette.ink,fontSize:14,fontWeight:'900'},currentPlanMeta:{marginTop:4,color:palette.secondary,fontSize:9,fontWeight:'700'},membershipExpiryPreview:{marginTop:-6,marginBottom:18,padding:14,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:14,borderWidth:1,borderColor:'#cfe3d6',borderRadius:13,backgroundColor:'#f4faf6'},membershipExpiryLabel:{color:palette.secondary,fontSize:8,fontWeight:'900',letterSpacing:.8},membershipExpiryDate:{marginTop:5,color:palette.ink,fontSize:13,fontWeight:'900'},membershipExpiryDays:{color:palette.action,fontSize:10,fontWeight:'900',textAlign:'right'},
+  periodChoices:{marginBottom:16,flexDirection:'row',gap:7},periodChoice:{height:38,flex:1,alignItems:'center',justifyContent:'center',borderWidth:1,borderColor:palette.line,borderRadius:11,backgroundColor:'#fbfcfb'},periodChoiceActive:{borderColor:palette.action,backgroundColor:'#e8f5ce'},periodChoiceText:{color:palette.secondary,fontSize:11,fontWeight:'900'},periodChoiceTextActive:{color:palette.action},purchasePreview:{marginBottom:16,padding:14,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:14,borderWidth:1,borderColor:'#cfe3d6',borderRadius:13,backgroundColor:'#f4faf6'},purchasePreviewLabel:{color:palette.secondary,fontSize:8,fontWeight:'900',letterSpacing:.8},purchasePreviewValue:{marginTop:5,color:palette.action,fontSize:16,fontWeight:'900'},purchasePreviewMeta:{marginTop:3,color:palette.secondary,fontSize:9,fontWeight:'700'},purchasePreviewDate:{marginTop:5,color:palette.ink,fontSize:11,fontWeight:'900',textAlign:'right'},
 });
 
 const darkPalette = {
@@ -824,6 +916,15 @@ const darkStyles = StyleSheet.create({
   statusChoiceActive:{borderColor:darkPalette.action,backgroundColor:darkPalette.actionSoft},
   statusChoiceText:{color:darkPalette.secondary},
   statusChoiceTextActive:{color:darkPalette.action},
+  periodChoice:{borderColor:darkPalette.border,backgroundColor:'#151b17'},
+  periodChoiceActive:{borderColor:darkPalette.action,backgroundColor:darkPalette.actionSoft},
+  periodChoiceText:{color:darkPalette.secondary},
+  periodChoiceTextActive:{color:darkPalette.action},
+  purchasePreview:{borderColor:'#3d594a',backgroundColor:'#19231d'},
+  purchasePreviewLabel:{color:darkPalette.secondary},
+  purchasePreviewValue:{color:darkPalette.action},
+  purchasePreviewMeta:{color:darkPalette.secondary},
+  purchasePreviewDate:{color:darkPalette.text},
   planState:{backgroundColor:'#3a2c19'},
   planStateActive:{backgroundColor:'#183a29'},
   planStateText:{color:'#f0b35f'},

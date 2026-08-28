@@ -1,0 +1,2 @@
+ALTER TABLE "Membership"
+ADD COLUMN "periodCount" INTEGER NOT NULL DEFAULT 1;

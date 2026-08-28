@@ -147,6 +147,10 @@ export class SyncService {
         const membership = await this.mini.renewMembership(operation.entityId, dto, user);
         return { status: 'APPLIED', result: { id: membership.id, paymentId: membership.payment?.id ?? null } };
       }
+      case 'MEMBERSHIP_DELETE': {
+        const result = await this.mini.deleteMembership(operation.entityId, user);
+        return { status: 'APPLIED', result };
+      }
       case 'PAYMENT_APPLY': {
         const dto = await this.payload(ApplyPaymentDto, { ...operation.payload, clientMutationId: operation.id, occurredAt: operation.occurredAt });
         const payment = await this.mini.applyPayment(operation.entityId, dto, user);

@@ -55,6 +55,13 @@ export class MiniService {
     });
   }
 
+  listPlatformSubscriptions() {
+    return this.prisma.platformSubscription.findMany({
+      include: { gym: { select: { id: true, name: true, slug: true } } },
+      orderBy: { activatedAt: 'desc' },
+    });
+  }
+
   async getGym(id: string) {
     const gym = await this.prisma.gym.findUnique({
       where: { id },
@@ -84,13 +91,21 @@ export class MiniService {
   async renewGymSubscription(id: string, subscriptionPlan: GymSubscriptionPlan, requestedTrialDays?: number) {
     const gym = await this.requireGym(id);
     const now = new Date();
-    const subscriptionStartedAt = gym.subscriptionEndsAt > now ? gym.subscriptionEndsAt : now;
+    const subscriptionStartedAt = gym.subscriptionEndsAt && gym.subscriptionEndsAt > now ? gym.subscriptionEndsAt : now;
     const subscriptionTrialDays = requestedTrialDays ?? gym.subscriptionTrialDays ?? 7;
     const subscriptionEndsAt = this.subscriptionEnd(subscriptionStartedAt, subscriptionPlan, subscriptionTrialDays);
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.gym.update({ where: { id }, data: { subscriptionPlan, subscriptionTrialDays, subscriptionStartedAt, subscriptionEndsAt } });
       await tx.platformSubscription.create({ data: { gymId: id, plan: subscriptionPlan, amount: PLATFORM_SUBSCRIPTION_PRICES[subscriptionPlan], startedAt: subscriptionStartedAt, endsAt: subscriptionEndsAt } });
       return updated;
+    });
+  }
+
+  async removeGymSubscription(id: string) {
+    await this.requireGym(id);
+    return this.prisma.gym.update({
+      where: { id },
+      data: { subscriptionPlan: null, subscriptionStartedAt: null, subscriptionEndsAt: null },
     });
   }
 
@@ -337,7 +352,7 @@ export class MiniService {
       return { monthStart, monthEnd };
     });
     const activeSubscriptionWhere = { isActive: true, subscriptionEndsAt: { gt: now } } satisfies Prisma.GymWhereInput;
-    const [gyms, activeGyms, members, newMembers, revenue, debtRows, subscriptionMonthlyRevenue, subscriptionTotalRevenue, activeTrialSubscriptions, activeMonthlySubscriptions, activeAnnualSubscriptions, expiredSubscriptions, ...memberTrendCounts] = await Promise.all([
+    const [gyms, activeGyms, members, newMembers, revenue, debtRows, subscriptionMonthlyRevenue, subscriptionTotalRevenue, activeTrialSubscriptions, activeMonthlySubscriptions, activeAnnualSubscriptions, expiredSubscriptions, withoutSubscriptions, ...memberTrendCounts] = await Promise.all([
       this.prisma.gym.count(),
       this.prisma.gym.count({ where: { isActive: true } }),
       this.prisma.member.count({ where: { status: 'ACTIVE' } }),
@@ -350,6 +365,7 @@ export class MiniService {
       this.prisma.gym.count({ where: { ...activeSubscriptionWhere, subscriptionPlan: GymSubscriptionPlan.MONTHLY } }),
       this.prisma.gym.count({ where: { ...activeSubscriptionWhere, subscriptionPlan: GymSubscriptionPlan.ANNUAL } }),
       this.prisma.gym.count({ where: { subscriptionEndsAt: { lte: now } } }),
+      this.prisma.gym.count({ where: { subscriptionPlan: null } }),
       ...trendMonths.map(({ monthStart, monthEnd }) => this.prisma.member.count({ where: { joinedAt: { gte: monthStart, lt: monthEnd } } })),
     ]);
     const debt = debtRows.reduce((sum, row) => sum + Number(row.amount) - Number(row.paidAmount), 0);
@@ -365,6 +381,7 @@ export class MiniService {
       activeMonthlySubscriptions,
       activeAnnualSubscriptions,
       expiredSubscriptions,
+      withoutSubscriptions,
     };
   }
 
@@ -461,6 +478,14 @@ export class MiniService {
     const membership = await this.prisma.membership.findFirst({ where: { id, member: { gymId } }, select: { memberId: true } });
     if (!membership) throw new NotFoundException('Membresía no encontrada');
     return this.updateGymMembership(gymId, membership.memberId, id, dto);
+  }
+
+  async deleteMembership(id: string, user: AuthUser) {
+    const gymId = this.gymId(user);
+    const membership = await this.prisma.membership.findFirst({ where: { id, member: { gymId } }, select: { memberId: true, status: true } });
+    if (!membership) throw new NotFoundException('Membresía no encontrada');
+    if (membership.status !== MembershipStatus.SCHEDULED) throw new BadRequestException('Solo se pueden eliminar renovaciones programadas');
+    return this.deleteGymMembership(gymId, membership.memberId, id);
   }
 
   async renewMembership(id: string, dto: RenewMembershipDto, user: AuthUser) {

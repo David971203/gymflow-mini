@@ -5,7 +5,7 @@ import { FormEvent, MouseEvent, useCallback, useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 
 type MemberTrendPoint = { month: string; members: number };
-type Overview = { gyms: number; activeGyms: number; members: number; newMembers: number; monthlyRevenue: number; pendingDebt: number; memberTrend: MemberTrendPoint[]; subscriptionMonthlyRevenue: number; subscriptionTotalRevenue: number; activeTrialSubscriptions: number; activeMonthlySubscriptions: number; activeAnnualSubscriptions: number; expiredSubscriptions: number };
+type Overview = { gyms: number; activeGyms: number; members: number; newMembers: number; monthlyRevenue: number; pendingDebt: number; memberTrend: MemberTrendPoint[]; subscriptionMonthlyRevenue: number; subscriptionTotalRevenue: number; activeTrialSubscriptions: number; activeMonthlySubscriptions: number; activeAnnualSubscriptions: number; expiredSubscriptions: number; withoutSubscriptions:number };
 type Admin = { id: string; name: string; email: string; isActive: boolean; createdAt?: string };
 type Plan = { id: string; name: string; description?: string; price: number | string; durationDays: number; isActive: boolean; createdAt?: string; updatedAt?: string };
 type DeleteOutcome = { id: string; disposition: "DELETED" | "ARCHIVED" };
@@ -17,6 +17,7 @@ type PaymentMovement = { id: string; amount: number | string; method: string; re
 type Payment = { id: string; amount: number | string; paidAmount: number | string; dueDate?: string; status: string; createdAt: string; member: Pick<Member, "id" | "firstName" | "lastName" | "ci">; membership: { id: string; plan: Plan }; movements: PaymentMovement[] };
 type GymFinances = { totalBilled: number; totalCollected: number; pendingBalance: number; overdueBalance: number; monthlyRevenue: number; pendingPayments: number; recentMovements: Array<PaymentMovement & { payment: Payment }> };
 type SubscriptionPlan = "TRIAL" | "MONTHLY" | "ANNUAL";
+type PlatformSubscription = { id:string; plan:SubscriptionPlan; amount:number|string; startedAt:string; endsAt:string; activatedAt:string; gym:{ id:string; name:string; slug:string } };
 type Gym = {
   id: string;
   name: string;
@@ -25,10 +26,10 @@ type Gym = {
   phone?: string;
   currency?: string;
   isActive: boolean;
-  subscriptionPlan: SubscriptionPlan;
+  subscriptionPlan: SubscriptionPlan | null;
   subscriptionTrialDays: number;
-  subscriptionStartedAt: string;
-  subscriptionEndsAt: string;
+  subscriptionStartedAt: string | null;
+  subscriptionEndsAt: string | null;
   createdAt?: string;
   updatedAt?: string;
   _count: { members: number; plans?: number; payments?: number };
@@ -38,11 +39,16 @@ type Gym = {
 const API = `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3100"}/api`;
 const demoSubscriptionEnd = new Date(); demoSubscriptionEnd.setFullYear(demoSubscriptionEnd.getFullYear() + 1);
 const recentMonthKeys = () => Array.from({ length: 6 }, (_, index) => { const date = new Date(); date.setDate(1); date.setMonth(date.getMonth() - (5 - index)); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`; });
-const demoOverview: Overview = { gyms: 3, activeGyms: 3, members: 341, newMembers: 38, monthlyRevenue: 98050, pendingDebt: 12300, memberTrend: recentMonthKeys().map((month, index) => ({ month, members: [21, 28, 25, 31, 34, 38][index] })), subscriptionMonthlyRevenue:55000, subscriptionTotalRevenue:55000, activeTrialSubscriptions:1, activeMonthlySubscriptions:1, activeAnnualSubscriptions:1, expiredSubscriptions:0 };
+const demoOverview: Overview = { gyms: 3, activeGyms: 3, members: 341, newMembers: 38, monthlyRevenue: 98050, pendingDebt: 12300, memberTrend: recentMonthKeys().map((month, index) => ({ month, members: [21, 28, 25, 31, 34, 38][index] })), subscriptionMonthlyRevenue:55000, subscriptionTotalRevenue:55000, activeTrialSubscriptions:1, activeMonthlySubscriptions:1, activeAnnualSubscriptions:1, expiredSubscriptions:0, withoutSubscriptions:0 };
 const demoGyms: Gym[] = [
   { id: "1", name: "Habana Fitness", slug: "habana-fitness", province: "La Habana", phone: "+53 5 123 4567", currency: "CUP", isActive: true, subscriptionPlan:"ANNUAL", subscriptionTrialDays:7, subscriptionStartedAt:new Date().toISOString(), subscriptionEndsAt:demoSubscriptionEnd.toISOString(), _count: { members: 184, plans: 3, payments: 172 }, users: [{ id: "a1", name: "Laura", email: "admin@habanafitness.cu", isActive: true }] },
   { id: "2", name: "Titan Gym", slug: "titan-gym", province: "Villa Clara", currency: "CUP", isActive: true, subscriptionPlan:"MONTHLY", subscriptionTrialDays:7, subscriptionStartedAt:new Date().toISOString(), subscriptionEndsAt:demoSubscriptionEnd.toISOString(), _count: { members: 96, plans: 2, payments: 88 }, users: [{ id: "a2", name: "Carlos", email: "admin@titangym.cu", isActive: true }] },
   { id: "3", name: "Zona Fuerte", slug: "zona-fuerte", province: "Santiago de Cuba", currency: "CUP", isActive: true, subscriptionPlan:"TRIAL", subscriptionTrialDays:7, subscriptionStartedAt:new Date().toISOString(), subscriptionEndsAt:demoSubscriptionEnd.toISOString(), _count: { members: 61, plans: 3, payments: 55 }, users: [{ id: "a3", name: "Marta", email: "admin@zonafuerte.cu", isActive: true }] },
+];
+const demoSubscriptions: PlatformSubscription[] = [
+  { id:"sub-1", plan:"ANNUAL", amount:50000, startedAt:new Date().toISOString(), endsAt:demoSubscriptionEnd.toISOString(), activatedAt:new Date().toISOString(), gym:{ id:"1", name:"Habana Fitness", slug:"habana-fitness" } },
+  { id:"sub-2", plan:"MONTHLY", amount:5000, startedAt:new Date().toISOString(), endsAt:demoSubscriptionEnd.toISOString(), activatedAt:new Date().toISOString(), gym:{ id:"2", name:"Titan Gym", slug:"titan-gym" } },
+  { id:"sub-3", plan:"TRIAL", amount:0, startedAt:new Date().toISOString(), endsAt:demoSubscriptionEnd.toISOString(), activatedAt:new Date().toISOString(), gym:{ id:"3", name:"Zona Fuerte", slug:"zona-fuerte" } },
 ];
 const demoPlans: Plan[] = [
   { id: "p1", name: "Mensual", description: "Acceso completo durante 30 días", price: 1500, durationDays: 30, isActive: true },
@@ -76,6 +82,7 @@ export default function Home() {
   const [demo, setDemo] = useState(false);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [gyms, setGyms] = useState<Gym[]>([]);
+  const [subscriptions, setSubscriptions] = useState<PlatformSubscription[]>([]);
   const [creating, setCreating] = useState(false);
   const [managing, setManaging] = useState<Gym | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -97,15 +104,17 @@ export default function Home() {
   }, []);
 
   const load = useCallback(async () => {
-    if (demo) { setOverview(demoOverview); setGyms(demoGyms); return; }
+    if (demo) { setOverview(demoOverview); setGyms(demoGyms); setSubscriptions(demoSubscriptions); return; }
     if (!token) return;
     try {
-      const [nextOverview, nextGyms] = await Promise.all([
+      const [nextOverview, nextGyms, nextSubscriptions] = await Promise.all([
         api<Overview>("/platform/overview", token),
         api<Gym[]>("/platform/gyms", token),
+        api<PlatformSubscription[]>("/platform/subscriptions", token),
       ]);
       setOverview(nextOverview);
       setGyms(nextGyms);
+      setSubscriptions(nextSubscriptions);
     } catch (error) {
       setNotice({ message: (error as Error).message, tone: "error" });
     }
@@ -127,7 +136,7 @@ export default function Home() {
   const logout = () => {
     localStorage.removeItem("gymflow_mini_super_token");
     sessionStorage.removeItem("gymflow_mini_super_demo");
-    setToken(""); setDemo(false); setOverview(null); setGyms([]);
+    setToken(""); setDemo(false); setOverview(null); setGyms([]); setSubscriptions([]);
   };
   const navigate = (event: MouseEvent<HTMLAnchorElement>, href: string) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -160,7 +169,9 @@ export default function Home() {
         <article><span>Ingresos acumulados</span><strong>{currency(overview?.subscriptionTotalRevenue)} <i>CUP</i></strong><small>Mensuales y anuales</small></article>
       </div>
 
-      <article className="panel subscription-overview"><div className="panel-title"><div><h2>Suscripciones de GymFlow Mini</h2><p>Estado actual de los planes contratados por los gimnasios.</p></div><span>Mensual 5 000 CUP · Anual 50 000 CUP</span></div><div className="subscription-stats"><div><span>Pruebas activas</span><strong>{overview?.activeTrialSubscriptions ?? 0}</strong><small>Sin ingreso</small></div><div><span>Mensuales activas</span><strong>{overview?.activeMonthlySubscriptions ?? 0}</strong><small>5 000 CUP por activación</small></div><div><span>Anuales activas</span><strong>{overview?.activeAnnualSubscriptions ?? 0}</strong><small>50 000 CUP por activación</small></div><div className={(overview?.expiredSubscriptions??0)>0?"attention":""}><span>Vencidas</span><strong>{overview?.expiredSubscriptions ?? 0}</strong><small>Solo consulta</small></div></div></article>
+      <article className="panel subscription-overview"><div className="panel-title"><div><h2>Suscripciones de GymFlow Mini</h2><p>Estado actual de los planes contratados por los gimnasios.</p></div><span>Mensual 5 000 CUP · Anual 50 000 CUP</span></div><div className="subscription-stats"><div><span>Pruebas activas</span><strong>{overview?.activeTrialSubscriptions ?? 0}</strong><small>Sin ingreso</small></div><div><span>Mensuales activas</span><strong>{overview?.activeMonthlySubscriptions ?? 0}</strong><small>5 000 CUP por activación</small></div><div><span>Anuales activas</span><strong>{overview?.activeAnnualSubscriptions ?? 0}</strong><small>50 000 CUP por activación</small></div><div className={(overview?.expiredSubscriptions??0)>0?"attention":""}><span>Vencidas</span><strong>{overview?.expiredSubscriptions ?? 0}</strong><small>Solo consulta</small></div><div className={(overview?.withoutSubscriptions??0)>0?"attention":""}><span>Sin membresía</span><strong>{overview?.withoutSubscriptions ?? 0}</strong><small>Acciones bloqueadas</small></div></div></article>
+
+      <article className="panel subscription-history"><div className="panel-title"><div><h2>Historial de suscripciones</h2><p>Todas las activaciones y renovaciones registradas en la plataforma.</p></div><span>{subscriptions.length} registro{subscriptions.length===1?"":"s"}</span></div><div className="subscription-history-head"><span>Gimnasio</span><span>Plan</span><span>Período contratado</span><span>Activación</span><span>Ingreso</span></div>{subscriptions.map(subscription=><div className="subscription-history-row" key={subscription.id}><div><strong>{subscription.gym.name}</strong><small>{subscription.gym.slug}</small></div><span className={`history-plan ${subscription.plan.toLowerCase()}`}>{subscriptionPlanLabel(subscription.plan)}</span><div><strong>{new Date(subscription.startedAt).toLocaleDateString("es-CU")} – {new Date(subscription.endsAt).toLocaleDateString("es-CU")}</strong><small>{Math.max(1,Math.round((new Date(subscription.endsAt).getTime()-new Date(subscription.startedAt).getTime())/86_400_000))} días</small></div><div><strong>{new Date(subscription.activatedAt).toLocaleDateString("es-CU")}</strong><small>{new Date(subscription.activatedAt).toLocaleTimeString("es-CU",{hour:"2-digit",minute:"2-digit"})}</small></div><strong className="history-amount">{currency(Number(subscription.amount))} CUP</strong></div>)}{!subscriptions.length&&<p className="empty-copy">Todavía no hay suscripciones registradas.</p>}</article>
 
       <div className="content-grid" id="finanzas">
         <article className="panel trend"><div className="panel-title"><div><h2>Actividad de la plataforma</h2><p>Nuevos miembros registrados en los últimos 6 meses</p></div><span>6 meses</span></div><div className="chart" aria-label="Nuevos miembros registrados por mes">{memberTrend.map(point=><div key={point.month} className="bar-wrap" title={`${point.members} miembros`}><div className="bar" style={{height:`${Math.max(point.members > 0 ? 8 : 0, (point.members / trendMaximum) * 100)}%`}}/><strong>{point.members}</strong><small>{monthLabel(point.month)}</small></div>)}</div></article>
@@ -171,7 +182,7 @@ export default function Home() {
         <div className="panel-title"><div><h2>Gimnasios</h2><p>Selecciona un negocio para editar sus datos, administradores y miembros.</p></div><button className="link-button" onClick={() => void load()}>Actualizar</button></div>
         <div className="table-head"><span>Gimnasio</span><span>Miembros</span><span>Administradores</span><span>Estado</span><span>Gestión</span></div>
         {gyms.map(gym => <div className="table-row" key={gym.id}>
-          <div className="gym-name"><span>{gym.name.slice(0,2).toUpperCase()}</span><div><strong>{gym.name}</strong><small>{gym.province ?? gym.slug} · {subscriptionExpired(gym) ? "Suscripción vencida" : subscriptionPlanLabel(gym.subscriptionPlan,gym.subscriptionTrialDays)}</small></div></div>
+          <div className="gym-name"><span>{gym.name.slice(0,2).toUpperCase()}</span><div><strong>{gym.name}</strong><small>{gym.province ?? gym.slug} · {!gym.subscriptionPlan ? "Sin membresía" : subscriptionExpired(gym) ? "Suscripción vencida" : subscriptionPlanLabel(gym.subscriptionPlan,gym.subscriptionTrialDays)}</small></div></div>
           <strong>{gym._count.members}</strong>
           <div className="admin-cell"><strong>{gym.users[0]?.name ?? "Sin asignar"}</strong><small>{gym.users.length > 1 ? `+${gym.users.length - 1} adicional(es)` : gym.users[0]?.email}</small></div>
           <button className={gym.isActive ? "badge" : "badge trial"} onClick={async()=>{ if(demo)return; await api(`/platform/gyms/${gym.id}/status`,token,{method:"PATCH",body:JSON.stringify({isActive:!gym.isActive})}); await load(); }}>{gym.isActive ? "Activo" : "Inactivo"}</button>
@@ -299,7 +310,7 @@ function ManageGym({ token, gym, demo, onClose, onChanged }: { token: string; gy
   return <div className="modal" role="dialog" aria-modal="true" aria-label={`Gestionar ${gym.name}`}>
     <section className="modal-card manage-card">
       <ModalHead eyebrow="GESTIÓN DE GIMNASIO" title={detail.name} onClose={onClose}/>
-      <div className="manage-summary"><span>{detail.province || "Provincia sin definir"}</span><span>{detail._count.members} miembros</span><span>{plans.length} planes</span><span>{admins.length} administradores</span><span className={subscriptionExpired(detail) ? "status-dot" : "status-dot active"}>{subscriptionExpired(detail) ? "Suscripción vencida" : `${subscriptionPlanLabel(detail.subscriptionPlan,detail.subscriptionTrialDays)} hasta ${new Date(detail.subscriptionEndsAt).toLocaleDateString("es-CU")}`}</span></div>
+      <div className="manage-summary"><span>{detail.province || "Provincia sin definir"}</span><span>{detail._count.members} miembros</span><span>{plans.length} planes</span><span>{admins.length} administradores</span><span className={subscriptionExpired(detail) ? "status-dot" : "status-dot active"}>{!detail.subscriptionPlan||!detail.subscriptionEndsAt ? "Sin membresía" : subscriptionExpired(detail) ? "Suscripción vencida" : `${subscriptionPlanLabel(detail.subscriptionPlan,detail.subscriptionTrialDays)} hasta ${new Date(detail.subscriptionEndsAt).toLocaleDateString("es-CU")}`}</span></div>
       {demo && <div className="demo-banner">La demostración es de solo lectura. Inicia sesión para guardar cambios reales.</div>}
       {notice && <NoticeBanner notice={notice} onClose={() => setNotice(null)}/>}
       <div className="manage-tabs" role="tablist">
@@ -311,7 +322,7 @@ function ManageGym({ token, gym, demo, onClose, onChanged }: { token: string; gy
         <button className={tab === "finances" ? "active" : ""} onClick={() => setTab("finances")}>Finanzas</button>
       </div>
       {loading ? <div className="loading-block">Cargando información…</div> : <>
-        {tab === "gym" && <><GymEditor gym={detail} disabled={demo} onSave={async payload => { const updated=await api<Gym>(`/platform/gyms/${gym.id}`,token,{method:"PATCH",body:JSON.stringify(payload)}); setDetail({...detail,...updated}); await complete("Información actualizada"); }}/><SubscriptionEditor gym={detail} disabled={demo} onRenew={async (subscriptionPlan,subscriptionTrialDays) => { const updated=await api<Gym>(`/platform/gyms/${gym.id}/subscription`,token,{method:"PATCH",body:JSON.stringify({subscriptionPlan,subscriptionTrialDays})}); setDetail({...detail,...updated}); await complete("Suscripción renovada"); }}/></>}
+        {tab === "gym" && <><GymEditor gym={detail} disabled={demo} onSave={async payload => { const updated=await api<Gym>(`/platform/gyms/${gym.id}`,token,{method:"PATCH",body:JSON.stringify(payload)}); setDetail({...detail,...updated}); await complete("Información actualizada"); }}/><SubscriptionEditor gym={detail} disabled={demo} onRenew={async (subscriptionPlan,subscriptionTrialDays) => { const updated=await api<Gym>(`/platform/gyms/${gym.id}/subscription`,token,{method:"PATCH",body:JSON.stringify({subscriptionPlan,subscriptionTrialDays})}); setDetail({...detail,...updated}); await complete("Suscripción renovada"); }} onRemove={async()=>{const updated=await api<Gym>(`/platform/gyms/${gym.id}/subscription`,token,{method:"DELETE"});setDetail({...detail,...updated});await complete("Membresía eliminada");}}/></>}
         {tab === "admins" && <section className="manager-section">
           <div className="section-tools"><div><h3>Administradores</h3><p>Cuentas con acceso operativo a este gimnasio.</p></div><button disabled={demo} onClick={() => { setAddingAdmin(true); setEditingAdmin(null); }}>+ Añadir</button></div>
           {(addingAdmin || editingAdmin) && <AdminEditor admin={editingAdmin} onCancel={() => { setAddingAdmin(false); setEditingAdmin(null); }} onSave={async payload => { if(editingAdmin) await api(`/platform/gyms/${gym.id}/admins/${editingAdmin.id}`,token,{method:"PATCH",body:JSON.stringify(payload)}); else await api(`/platform/gyms/${gym.id}/admins`,token,{method:"POST",body:JSON.stringify(payload)}); await complete(editingAdmin ? "Administrador actualizado" : "Administrador creado"); }}/>}
@@ -351,17 +362,22 @@ function ConfirmDelete({ label, deleting, onCancel, onConfirm }: { label: string
   return <div className="confirm-backdrop" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-copy"><section className="confirm-card"><div className="confirm-icon">!</div><h3 id="delete-title">Eliminar registro</h3><p id="delete-copy">¿Deseas eliminar {label}?</p><div className="confirm-actions"><button disabled={deleting} onClick={onCancel}>Cancelar</button><button className="delete-confirm" disabled={deleting} onClick={onConfirm}>{deleting ? "Eliminando…" : "Eliminar"}</button></div></section></div>;
 }
 
+function ConfirmSubscriptionRemoval({ gymName, deleting, onCancel, onConfirm }: { gymName:string; deleting:boolean; onCancel:()=>void; onConfirm:()=>void }) {
+  return <div className="confirm-backdrop" role="alertdialog" aria-modal="true" aria-labelledby="subscription-delete-title" aria-describedby="subscription-delete-copy"><section className="confirm-card"><div className="confirm-icon">!</div><h3 id="subscription-delete-title">Eliminar membresía</h3><p id="subscription-delete-copy">{gymName} quedará sin membresía y en modo de solo consulta. El historial anterior se conservará.</p><div className="confirm-actions"><button disabled={deleting} onClick={onCancel}>Cancelar</button><button className="delete-confirm" disabled={deleting} onClick={onConfirm}>{deleting?"Eliminando…":"Eliminar membresía"}</button></div></section></div>;
+}
+
 function GymEditor({ gym, disabled, onSave }: { gym: Gym; disabled: boolean; onSave: (payload: Record<string, unknown>) => Promise<void> }) {
   const [error,setError]=useState(""); const [saving,setSaving]=useState(false);
   const submit=async(event:FormEvent<HTMLFormElement>)=>{event.preventDefault();setSaving(true);setError("");const form=new FormData(event.currentTarget);const payload={...Object.fromEntries(form),isActive:form.get("isActive")==="on"};try{await onSave(payload);}catch(reason){setError((reason as Error).message);}finally{setSaving(false);}};
   return <form className="editor-form" onSubmit={submit}><div className="form-grid"><label>Nombre<input name="name" defaultValue={gym.name} required disabled={disabled}/></label><label>Identificador<input name="slug" defaultValue={gym.slug} pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required disabled={disabled}/></label><label>Provincia<input name="province" defaultValue={gym.province ?? ""} disabled={disabled}/></label><label>Teléfono<input name="phone" defaultValue={gym.phone ?? ""} disabled={disabled}/></label><label>Moneda del gimnasio<select name="currency" defaultValue={gym.currency ?? "CUP"} required disabled={disabled}><option value="CUP">CUP · Peso cubano</option><option value="USD">USD · Dólar estadounidense</option></select></label><label className="check-label"><input name="isActive" type="checkbox" defaultChecked={gym.isActive} disabled={disabled}/><span>Gimnasio activo y con acceso habilitado</span></label></div>{error&&<div className="form-error">{error}</div>}<button className="submit compact" disabled={disabled||saving}>{saving?"Guardando…":"Guardar información"}</button></form>;
 }
 
-function SubscriptionEditor({ gym, disabled, onRenew }: { gym: Gym; disabled: boolean; onRenew: (plan: SubscriptionPlan, trialDays?: number) => Promise<void> }) {
-  const [plan,setPlan]=useState<SubscriptionPlan>(gym.subscriptionPlan); const [trialDays,setTrialDays]=useState(String(gym.subscriptionTrialDays ?? 7)); const [saving,setSaving]=useState(false); const [error,setError]=useState("");
+function SubscriptionEditor({ gym, disabled, onRenew, onRemove }: { gym: Gym; disabled: boolean; onRenew: (plan: SubscriptionPlan, trialDays?: number) => Promise<void>; onRemove:()=>Promise<void> }) {
+  const [plan,setPlan]=useState<SubscriptionPlan>(gym.subscriptionPlan??"TRIAL"); const [trialDays,setTrialDays]=useState(String(gym.subscriptionTrialDays ?? 7)); const [saving,setSaving]=useState(false); const [confirmingRemove,setConfirmingRemove]=useState(false); const [error,setError]=useState("");
   const validTrialDays=Number.isInteger(Number(trialDays))&&Number(trialDays)>=1&&Number(trialDays)<=365;
   const renew=async()=>{setSaving(true);setError("");try{await onRenew(plan,plan==="TRIAL"?Number(trialDays):undefined);}catch(reason){setError((reason as Error).message);}finally{setSaving(false);}};
-  return <section className={`subscription-editor ${plan==="TRIAL"?"trial":""} ${subscriptionExpired(gym)?"expired":""}`}><div><span>Suscripción de GymFlow Mini</span><strong>{subscriptionPlanLabel(gym.subscriptionPlan,gym.subscriptionTrialDays)}</strong><small>{subscriptionExpired(gym)?"Vencida":"Activa"} · vence {new Date(gym.subscriptionEndsAt).toLocaleDateString("es-CU")}</small></div><label>Plan para renovar<select value={plan} onChange={event=>setPlan(event.target.value as SubscriptionPlan)} disabled={disabled}><option value="TRIAL">Prueba gratuita</option><option value="MONTHLY">Mensual · 1 mes</option><option value="ANNUAL">Anual · 1 año</option></select></label>{plan==="TRIAL"&&<label>Días de prueba<input type="number" min="1" max="365" step="1" value={trialDays} onChange={event=>setTrialDays(event.target.value)} disabled={disabled}/></label>}{error&&<div className="form-error">{error}</div>}<button type="button" className="submit compact" disabled={disabled||saving||(plan==="TRIAL"&&!validTrialDays)} onClick={()=>void renew()}>{saving?"Renovando…":"Renovar suscripción"}</button></section>;
+  const remove=async()=>{setSaving(true);setError("");try{await onRemove();setConfirmingRemove(false);}catch(reason){setError((reason as Error).message);}finally{setSaving(false);}};
+  return <section className={`subscription-editor ${plan==="TRIAL"?"trial":""} ${subscriptionExpired(gym)?"expired":""}`}><div><span>Suscripción de GymFlow Mini</span><strong>{gym.subscriptionPlan?subscriptionPlanLabel(gym.subscriptionPlan,gym.subscriptionTrialDays):"Sin membresía"}</strong><small>{!gym.subscriptionPlan||!gym.subscriptionEndsAt?"Acciones bloqueadas · solo consulta":`${subscriptionExpired(gym)?"Vencida":"Activa"} · vence ${new Date(gym.subscriptionEndsAt).toLocaleDateString("es-CU")}`}</small></div><label>Plan para activar<select value={plan} onChange={event=>setPlan(event.target.value as SubscriptionPlan)} disabled={disabled}><option value="TRIAL">Prueba gratuita</option><option value="MONTHLY">Mensual · 1 mes</option><option value="ANNUAL">Anual · 1 año</option></select></label>{plan==="TRIAL"&&<label>Días de prueba<input type="number" min="1" max="365" step="1" value={trialDays} onChange={event=>setTrialDays(event.target.value)} disabled={disabled}/></label>}{error&&<div className="form-error">{error}</div>}<div className="subscription-actions"><button type="button" className="submit compact" disabled={disabled||saving||(plan==="TRIAL"&&!validTrialDays)} onClick={()=>void renew()}>{saving?"Guardando…":gym.subscriptionPlan?"Renovar suscripción":"Activar suscripción"}</button>{gym.subscriptionPlan&&<button type="button" className="remove-subscription" disabled={disabled||saving} onClick={()=>setConfirmingRemove(true)}>Eliminar membresía</button>}</div>{confirmingRemove&&<ConfirmSubscriptionRemoval gymName={gym.name} deleting={saving} onCancel={()=>setConfirmingRemove(false)} onConfirm={()=>void remove()}/>}</section>;
 }
 
 function AdminEditor({ admin, onCancel, onSave }: { admin: Admin | null; onCancel: () => void; onSave: (payload: Record<string, unknown>) => Promise<void> }) {
@@ -423,7 +439,7 @@ function subscriptionPlanLabel(plan: SubscriptionPlan, trialDays = 7) {
 }
 
 function subscriptionExpired(gym: Gym) {
-  return new Date(gym.subscriptionEndsAt).getTime() <= Date.now();
+  return !gym.subscriptionEndsAt || new Date(gym.subscriptionEndsAt).getTime() <= Date.now();
 }
 
 function membershipLabel(membership: Membership) {

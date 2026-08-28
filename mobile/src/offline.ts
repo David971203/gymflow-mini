@@ -241,6 +241,7 @@ export const offline = {
       const oldPlanId = membership.plan.id;
       const payment = payments.find((item) => item.membership.id === membershipId) ?? payments.find((item) => item.member.id === memberId && item.membership.plan.id === oldPlanId);
       if (payment && Number(payment.paidAmount) > Number(plan.price)) throw new Error('El importe abonado supera el precio del nuevo plan');
+      if (plan.id !== oldPlanId) membership.endDate = new Date(new Date(membership.startDate).getTime() + plan.durationDays * 86_400_000).toISOString();
       membership.plan = plan; membership.status = input.status;
       if (payment) {
         payment.membership.plan = plan; payment.amount = plan.price;
@@ -248,6 +249,48 @@ export const offline = {
       }
       await writeCache(scope, 'members', members); await writeCache(scope, 'payments', payments);
       await enqueue(scope, { id: operationId, type: 'MEMBERSHIP_UPDATE', entityId: membershipId, payload: input, occurredAt });
+    });
+    await updateState(scope, 'OFFLINE'); emit(); void syncNow(scope);
+  },
+
+  async renewMembership(scope: string, memberId: string, currentMembershipId: string, input: { planId: string; initialPayment?: number; paymentMethod?: string }) {
+    await waitForActiveSync(scope);
+    const database = await db();
+    const membershipId = uuid(); const paymentId = uuid(); const operationId = uuid(); const occurredAt = new Date().toISOString();
+    await database.withTransactionAsync(async () => {
+      const [members, plans, payments] = await Promise.all([offline.members(scope), offline.plans(scope), offline.payments(scope)]);
+      const member = members.find((item) => item.id === memberId); const current = member?.memberships.find((item) => item.id === currentMembershipId);
+      const plan = plans.find((item) => item.id === input.planId && item.isActive);
+      if (!member || !current || !plan) throw new Error('No se encontró la membresía actual o el plan en este dispositivo');
+      if (member.memberships.some((membership) => membership.status === 'SCHEDULED')) throw new Error('El miembro ya tiene una renovación programada');
+      const now = new Date(); const currentEnd = new Date(current.endDate); const startDate = currentEnd > now ? currentEnd : now;
+      const endDate = new Date(startDate); endDate.setDate(endDate.getDate() + plan.durationDays);
+      const initial = input.initialPayment ?? 0; const total = Number(plan.price);
+      if (initial > total) throw new Error('El abono inicial supera el precio del plan');
+      const paymentStatus = initial === 0 ? 'PENDING' : initial >= total ? 'PAID' : 'PARTIAL';
+      const movements: Movement[] = initial > 0 ? [{ id: operationId, amount: String(initial), occurredAt }] : [];
+      const membership: Membership = { id: membershipId, status: startDate > now ? 'SCHEDULED' : 'ACTIVE', startDate: startDate.toISOString(), endDate: endDate.toISOString(), plan };
+      const payment: Payment = { id: paymentId, amount: String(total), paidAmount: String(initial), status: paymentStatus, createdAt: occurredAt, dueDate: startDate.toISOString(), member, membership: { id: membershipId, plan }, movements };
+      member.memberships.unshift(membership); payments.unshift(payment);
+      await writeCache(scope, 'members', members); await writeCache(scope, 'payments', payments);
+      await enqueue(scope, { id: operationId, type: 'MEMBERSHIP_RENEW', entityId: currentMembershipId, payload: { ...input, clientMembershipId: membershipId, clientPaymentId: paymentId }, occurredAt });
+    });
+    await updateState(scope, 'OFFLINE'); emit(); void syncNow(scope);
+    return membershipId;
+  },
+
+  async deleteScheduledMembership(scope: string, memberId: string, membershipId: string) {
+    await waitForActiveSync(scope);
+    const database = await db(); const operationId = uuid(); const occurredAt = new Date().toISOString();
+    await database.withTransactionAsync(async () => {
+      const [members, payments] = await Promise.all([offline.members(scope), offline.payments(scope)]);
+      const member = members.find((item) => item.id === memberId); const membership = member?.memberships.find((item) => item.id === membershipId);
+      if (!member || !membership) throw new Error('Renovación programada no encontrada en este dispositivo');
+      if (membership.status !== 'SCHEDULED') throw new Error('Solo se pueden eliminar renovaciones programadas');
+      member.memberships = member.memberships.filter((item) => item.id !== membershipId);
+      await writeCache(scope, 'members', members);
+      await writeCache(scope, 'payments', payments.filter((payment) => payment.membership.id !== membershipId));
+      await enqueue(scope, { id: operationId, type: 'MEMBERSHIP_DELETE', entityId: membershipId, payload: {}, occurredAt });
     });
     await updateState(scope, 'OFFLINE'); emit(); void syncNow(scope);
   },

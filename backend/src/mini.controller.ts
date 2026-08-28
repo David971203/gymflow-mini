@@ -11,12 +11,14 @@ import { ApplyPaymentDto, AssignGymMembershipDto, CreateGymAdminDto, CreateGymDt
 export class PlatformController {
   constructor(private readonly mini: MiniService) {}
   @Get('overview') overview() { return this.mini.platformOverview(); }
+  @Get('subscriptions') subscriptions() { return this.mini.listPlatformSubscriptions(); }
   @Get('gyms') gyms() { return this.mini.listGyms(); }
   @Post('gyms') createGym(@Body() dto: CreateGymDto) { return this.mini.createGym(dto); }
   @Get('gyms/:id') gym(@Param('id') id: string) { return this.mini.getGym(id); }
   @Patch('gyms/:id') updateGym(@Param('id') id: string, @Body() dto: UpdateGymDto) { return this.mini.updateGym(id, dto); }
   @Patch('gyms/:id/status') status(@Param('id') id: string, @Body() dto: UpdateGymStatusDto) { return this.mini.updateGymStatus(id, dto.isActive); }
   @Patch('gyms/:id/subscription') subscription(@Param('id') id: string, @Body() dto: UpdateGymSubscriptionDto) { return this.mini.renewGymSubscription(id, dto.subscriptionPlan, dto.subscriptionTrialDays); }
+  @Delete('gyms/:id/subscription') removeSubscription(@Param('id') id: string) { return this.mini.removeGymSubscription(id); }
   @Get('gyms/:gymId/admins') admins(@Param('gymId') gymId: string) { return this.mini.listGymAdmins(gymId); }
   @Post('gyms/:gymId/admins') createAdmin(@Param('gymId') gymId: string, @Body() dto: CreateGymAdminDto) { return this.mini.createGymAdmin(gymId, dto); }
   @Patch('gyms/:gymId/admins/:id') updateAdmin(@Param('gymId') gymId: string, @Param('id') id: string, @Body() dto: UpdateGymAdminDto) { return this.mini.updateGymAdmin(gymId, id, dto); }
@@ -58,6 +60,7 @@ export class AdminController {
   @Get('memberships') memberships(@CurrentUser() user: AuthUser, @Query('memberId') memberId?: string) { return this.mini.listMemberships(user, memberId); }
   @Post('memberships') createMembership(@Body() dto: CreateMembershipDto, @CurrentUser() user: AuthUser) { return this.mini.createMembership(dto, user); }
   @Patch('memberships/:id') updateMembership(@Param('id') id: string, @Body() dto: UpdateGymMembershipDto, @CurrentUser() user: AuthUser) { return this.mini.updateMembership(id, dto, user); }
+  @Delete('memberships/:id') deleteMembership(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.mini.deleteMembership(id, user); }
   @Post('memberships/:id/renew') renew(@Param('id') id: string, @Body() dto: RenewMembershipDto, @CurrentUser() user: AuthUser) { return this.mini.renewMembership(id, dto, user); }
 
   @Get('payments') payments(@CurrentUser() user: AuthUser) { return this.mini.listPayments(user); }

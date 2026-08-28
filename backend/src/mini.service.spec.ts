@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
-import { GymSubscriptionPlan, PaymentStatus, Prisma } from '@prisma/client';
+import { GymSubscriptionPlan, MembershipStatus, PaymentStatus, Prisma } from '@prisma/client';
 import { MiniService } from './mini.service';
 
 describe('MiniService', () => {
@@ -76,6 +76,16 @@ describe('MiniService', () => {
     expect(findMany).toHaveBeenCalledWith({ where: { gymId: 'gym-1' }, orderBy: [{ isActive: 'desc' }, { price: 'asc' }] });
   });
 
+  it('lista el historial completo de suscripciones de la plataforma', async () => {
+    const findMany = jest.fn().mockResolvedValue([]);
+    const service = new MiniService({ platformSubscription:{ findMany } } as never);
+    await service.listPlatformSubscriptions();
+    expect(findMany).toHaveBeenCalledWith({
+      include:{ gym:{ select:{ id:true, name:true, slug:true } } },
+      orderBy:{ activatedAt:'desc' },
+    });
+  });
+
   it('impide editar un plan que pertenece a otro gimnasio', async () => {
     const prisma = { gym: { findUnique: jest.fn().mockResolvedValue({ id: 'gym-1' }) }, plan: { findFirst: jest.fn().mockResolvedValue(null) } };
     const service = new MiniService(prisma as never);
@@ -112,6 +122,23 @@ describe('MiniService', () => {
     const prisma = { membership: { findFirst: jest.fn().mockResolvedValue(null) } };
     const service = new MiniService(prisma as never);
     await expect(service.updateMembership('membership-other', { status: 'CANCELLED' as never }, user)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('elimina desde móvil solamente una renovación programada del gimnasio autenticado', async () => {
+    const prisma = { membership: { findFirst: jest.fn().mockResolvedValue({ memberId:'member-1', status:MembershipStatus.SCHEDULED }) } };
+    const service = new MiniService(prisma as never);
+    const remove = jest.spyOn(service, 'deleteGymMembership').mockResolvedValue({ id:'membership-1', disposition:'DELETED' });
+
+    await expect(service.deleteMembership('membership-1', user)).resolves.toEqual({ id:'membership-1', disposition:'DELETED' });
+    expect(prisma.membership.findFirst).toHaveBeenCalledWith({ where:{ id:'membership-1', member:{ gymId:'gym-1' } }, select:{ memberId:true, status:true } });
+    expect(remove).toHaveBeenCalledWith('gym-1', 'member-1', 'membership-1');
+  });
+
+  it('impide eliminar desde móvil una membresía que no está programada', async () => {
+    const prisma = { membership: { findFirst: jest.fn().mockResolvedValue({ memberId:'member-1', status:MembershipStatus.ACTIVE }) } };
+    const service = new MiniService(prisma as never);
+
+    await expect(service.deleteMembership('membership-1', user)).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('protege al único administrador activo del gimnasio', async () => {
@@ -205,7 +232,7 @@ describe('MiniService', () => {
 
   it('resume las suscripciones e ingresos propios de GymFlow Mini', async () => {
     const gymCount = jest.fn();
-    [3,3,1,1,1,0].forEach(value => gymCount.mockResolvedValueOnce(value));
+    [3,3,1,1,1,0,0].forEach(value => gymCount.mockResolvedValueOnce(value));
     const memberCount = jest.fn();
     [341,38,21,28,25,31,34,38].forEach(value => memberCount.mockResolvedValueOnce(value));
     const subscriptionAggregate = jest.fn()
@@ -227,6 +254,7 @@ describe('MiniService', () => {
       activeMonthlySubscriptions:1,
       activeAnnualSubscriptions:1,
       expiredSubscriptions:0,
+      withoutSubscriptions:0,
     });
   });
 
@@ -268,5 +296,12 @@ describe('MiniService', () => {
       expect(update).toHaveBeenCalledWith({ where:{ id:'gym-1' }, data:{ subscriptionPlan:GymSubscriptionPlan.TRIAL, subscriptionTrialDays:14, subscriptionStartedAt:new Date('2026-08-27T12:00:00.000Z'), subscriptionEndsAt:new Date('2026-09-10T12:00:00.000Z') } });
       expect(create.mock.calls[0][0].data.amount).toBe(0);
     } finally { jest.useRealTimers(); }
+  });
+
+  it('elimina la membresía actual sin borrar su historial', async () => {
+    const update = jest.fn().mockResolvedValue({ id:'gym-1', subscriptionPlan:null, subscriptionStartedAt:null, subscriptionEndsAt:null });
+    const service = new MiniService({ gym:{ findUnique:jest.fn().mockResolvedValue({ id:'gym-1' }), update } } as never);
+    await expect(service.removeGymSubscription('gym-1')).resolves.toMatchObject({ subscriptionPlan:null, subscriptionEndsAt:null });
+    expect(update).toHaveBeenCalledWith({ where:{ id:'gym-1' }, data:{ subscriptionPlan:null, subscriptionStartedAt:null, subscriptionEndsAt:null } });
   });
 });

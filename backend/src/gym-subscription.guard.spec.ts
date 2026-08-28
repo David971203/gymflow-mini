@@ -19,6 +19,11 @@ describe('GymSubscriptionGuard', () => {
     await expect(guard.canActivate(context('POST'))).rejects.toEqual(new ForbiddenException('Para continuar debes renovar la membresía de tu gimnasio.'));
   });
 
+  it('bloquea escrituras cuando el gimnasio no tiene membresía', async () => {
+    const guard = new GymSubscriptionGuard({ gym: { findUnique: jest.fn().mockResolvedValue({ isActive:true, subscriptionEndsAt:null }) } } as never);
+    await expect(guard.canActivate(context('POST'))).rejects.toEqual(new ForbiddenException('Para continuar debes renovar la membresía de tu gimnasio.'));
+  });
+
   it('permite escrituras mientras la suscripción está activa', async () => {
     const guard = new GymSubscriptionGuard({ gym: { findUnique: jest.fn().mockResolvedValue({ isActive:true, subscriptionEndsAt:new Date(Date.now()+60_000) }) } } as never);
     await expect(guard.canActivate(context('PATCH'))).resolves.toBe(true);

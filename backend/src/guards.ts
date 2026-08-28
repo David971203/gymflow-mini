@@ -34,7 +34,7 @@ export class GymSubscriptionGuard implements CanActivate {
     if (!request.user || request.user.role !== UserRole.ADMIN || ['GET','HEAD','OPTIONS'].includes(request.method)) return true;
     if (!request.user.gymId) throw new ForbiddenException('Para continuar debes renovar la membresía de tu gimnasio.');
     const gym = await this.prisma.gym.findUnique({ where: { id: request.user.gymId }, select: { isActive: true, subscriptionEndsAt: true } });
-    if (!gym?.isActive || gym.subscriptionEndsAt.getTime() <= Date.now()) throw new ForbiddenException('Para continuar debes renovar la membresía de tu gimnasio.');
+    if (!gym?.isActive || !gym.subscriptionEndsAt || gym.subscriptionEndsAt.getTime() <= Date.now()) throw new ForbiddenException('Para continuar debes renovar la membresía de tu gimnasio.');
     return true;
   }
 }

@@ -109,11 +109,12 @@ export const offline = {
     const [members, payments] = await Promise.all([offline.members(scope), offline.payments(scope)]);
     const now = new Date();
     const duePayments = payments.filter((payment) => {
+      if (payment.status === 'CANCELLED') return false;
       if (!payment.dueDate) return true;
       const dueAt = new Date(payment.dueDate).getTime();
       return Number.isNaN(dueAt) || dueAt <= now.getTime();
     });
-    const movements = payments.flatMap((payment) => payment.movements.map((movement) => ({ ...movement, payment: { member: payment.member } })));
+    const movements = payments.filter((payment) => payment.status !== 'CANCELLED').flatMap((payment) => payment.movements.map((movement) => ({ ...movement, payment: { member: payment.member } })));
     const monthly = movements.filter((movement) => { const date = new Date(movement.occurredAt); return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth(); });
     const activeMemberships = members.reduce((total, member) => total + member.memberships.filter((membership) => membership.status === 'ACTIVE' && new Date(membership.endDate) >= now).length, 0);
     return {
@@ -162,7 +163,22 @@ export const offline = {
       const member = members.find((item) => item.id === id);
       if (!member) throw new Error('Miembro no encontrado en este dispositivo');
       const hasHistory = member.memberships.length > 0 || payments.some((payment) => payment.member.id === id);
-      await writeCache(scope, 'members', hasHistory ? members.map((item) => item.id === id ? { ...item, status: 'INACTIVE' } : item) : members.filter((item) => item.id !== id));
+      if (hasHistory) {
+        const membershipsToCancel = member.memberships.filter((membership) => membership.status === 'ACTIVE' || membership.status === 'SCHEDULED');
+        const membershipIds = new Set(membershipsToCancel.map((membership) => membership.id));
+        const paymentIds = new Set(membershipsToCancel.flatMap((membership) => membership.payment?.id ? [membership.payment.id] : []));
+        member.status = 'INACTIVE';
+        member.memberships = member.memberships.map((membership) => membershipIds.has(membership.id)
+          ? { ...membership, status: 'CANCELLED', ...(membership.payment ? { payment: { ...membership.payment, status: 'CANCELLED' } } : {}) }
+          : membership);
+        const archivedPayments = payments.map((payment) => membershipIds.has(payment.membership.id ?? '') || paymentIds.has(payment.id)
+          ? { ...payment, status: 'CANCELLED', member: { ...payment.member, status: 'INACTIVE' } }
+          : payment);
+        await writeCache(scope, 'members', members);
+        await writeCache(scope, 'payments', archivedPayments);
+      } else {
+        await writeCache(scope, 'members', members.filter((item) => item.id !== id));
+      }
       await enqueue(scope, { id: operationId, type: 'MEMBER_DELETE', entityId: id, payload: {}, occurredAt });
     });
     await updateState(scope, 'OFFLINE'); emit(); void syncNow(scope);
@@ -220,13 +236,15 @@ export const offline = {
       if (!member || !plan) throw new Error('No se encontró el miembro o plan en este dispositivo');
       if (member.memberships.some((membership) => membership.status === 'ACTIVE' && new Date(membership.endDate) >= new Date())) throw new Error('El miembro ya tiene una membresía activa');
       const periodCount = input.periodCount ?? 1;
+      if (!Number.isInteger(periodCount) || periodCount < 1 || periodCount > 24) throw new Error('La cantidad de períodos debe ser un número entero entre 1 y 24');
       const startDate = new Date(); const endDate = new Date(startDate); endDate.setDate(endDate.getDate() + plan.durationDays * periodCount);
       const initial = input.initialPayment ?? 0; const total = Number(plan.price) * periodCount;
       if (initial > total) throw new Error('El abono inicial supera el precio del plan');
       const status = initial === 0 ? 'PENDING' : initial >= total ? 'PAID' : 'PARTIAL';
       const movements: Movement[] = initial > 0 ? [{ id: operationId, amount: String(initial), occurredAt }] : [];
-      const membership: Membership = { id: membershipId, status: 'ACTIVE', startDate: startDate.toISOString(), endDate: endDate.toISOString(), periodCount, plan };
-      const payment: Payment = { id: paymentId, amount: String(total), paidAmount: String(initial), status, createdAt: occurredAt, dueDate: startDate.toISOString(), member, membership: { id: membershipId, plan, periodCount }, movements };
+      const membership: Membership = { id: membershipId, status: 'ACTIVE', startDate: startDate.toISOString(), endDate: endDate.toISOString(), periodCount, plan, planName:plan.name, planPrice:plan.price, planDurationDays:plan.durationDays };
+      member.status = 'ACTIVE';
+      const payment: Payment = { id: paymentId, amount: String(total), paidAmount: String(initial), status, createdAt: occurredAt, dueDate: startDate.toISOString(), member, membership: { id:membershipId, plan, planName:plan.name, planPrice:plan.price, planDurationDays:plan.durationDays, periodCount }, movements };
       member.memberships.unshift(membership); payments.unshift(payment);
       await writeCache(scope, 'members', members); await writeCache(scope, 'payments', payments);
       await enqueue(scope, { id: operationId, type: 'MEMBERSHIP_ASSIGN', entityId: membershipId, payload: { ...input, clientPaymentId: paymentId }, occurredAt });
@@ -249,11 +267,21 @@ export const offline = {
       const payment = payments.find((item) => item.membership.id === membershipId) ?? payments.find((item) => item.member.id === memberId && item.membership.plan.id === oldPlanId);
       if (payment && Number(payment.paidAmount) > Number(plan.price)) throw new Error('El importe abonado supera el precio del nuevo plan');
       if (plan.id !== oldPlanId) membership.endDate = new Date(new Date(membership.startDate).getTime() + plan.durationDays * (membership.periodCount ?? 1) * 86_400_000).toISOString();
+      if (plan.id !== oldPlanId) {
+        membership.planName = plan.name; membership.planPrice = plan.price; membership.planDurationDays = plan.durationDays;
+      }
       membership.plan = plan; membership.status = input.status;
       if (payment) {
-        payment.membership.plan = plan; payment.amount = String(Number(plan.price) * (membership.periodCount ?? 1));
+        payment.membership.plan = plan;
+        if (plan.id !== oldPlanId) {
+          payment.membership.planName = plan.name; payment.membership.planPrice = plan.price; payment.membership.planDurationDays = plan.durationDays;
+        }
+        payment.amount = String(Number(plan.price) * (membership.periodCount ?? 1));
         payment.status = input.status === 'CANCELLED' ? 'CANCELLED' : Number(payment.paidAmount) === 0 ? 'PENDING' : Number(payment.paidAmount) >= Number(plan.price) ? 'PAID' : 'PARTIAL';
       }
+      if (input.status === 'ACTIVE') member.status = 'ACTIVE';
+      else if (input.status === 'CANCELLED' && !member.memberships.some((item) => item.id !== membershipId && item.status === 'ACTIVE' && new Date(item.endDate).getTime() >= Date.now())) member.status = 'INACTIVE';
+      if (payment) payment.member.status = member.status;
       await writeCache(scope, 'members', members); await writeCache(scope, 'payments', payments);
       await enqueue(scope, { id: operationId, type: 'MEMBERSHIP_UPDATE', entityId: membershipId, payload: input, occurredAt });
     });
@@ -271,14 +299,15 @@ export const offline = {
       if (!member || !current || !plan) throw new Error('No se encontró la membresía actual o el plan en este dispositivo');
       if (member.memberships.some((membership) => membership.status === 'SCHEDULED')) throw new Error('El miembro ya tiene una renovación programada');
       const periodCount = input.periodCount ?? 1;
+      if (!Number.isInteger(periodCount) || periodCount < 1 || periodCount > 24) throw new Error('La cantidad de períodos debe ser un número entero entre 1 y 24');
       const now = new Date(); const currentEnd = new Date(current.endDate); const startDate = currentEnd > now ? currentEnd : now;
       const endDate = new Date(startDate); endDate.setDate(endDate.getDate() + plan.durationDays * periodCount);
       const initial = input.initialPayment ?? 0; const total = Number(plan.price) * periodCount;
       if (initial > total) throw new Error('El abono inicial supera el precio del plan');
       const paymentStatus = initial === 0 ? 'PENDING' : initial >= total ? 'PAID' : 'PARTIAL';
       const movements: Movement[] = initial > 0 ? [{ id: operationId, amount: String(initial), occurredAt }] : [];
-      const membership: Membership = { id: membershipId, status: startDate > now ? 'SCHEDULED' : 'ACTIVE', startDate: startDate.toISOString(), endDate: endDate.toISOString(), periodCount, plan };
-      const payment: Payment = { id: paymentId, amount: String(total), paidAmount: String(initial), status: paymentStatus, createdAt: occurredAt, dueDate: startDate.toISOString(), member, membership: { id: membershipId, plan, periodCount }, movements };
+      const membership: Membership = { id:membershipId, status:startDate > now ? 'SCHEDULED' : 'ACTIVE', startDate:startDate.toISOString(), endDate:endDate.toISOString(), periodCount, plan, planName:plan.name, planPrice:plan.price, planDurationDays:plan.durationDays };
+      const payment: Payment = { id:paymentId, amount:String(total), paidAmount:String(initial), status:paymentStatus, createdAt:occurredAt, dueDate:startDate.toISOString(), member, membership:{ id:membershipId, plan, planName:plan.name, planPrice:plan.price, planDurationDays:plan.durationDays, periodCount }, movements };
       member.memberships.unshift(membership); payments.unshift(payment);
       await writeCache(scope, 'members', members); await writeCache(scope, 'payments', payments);
       await enqueue(scope, { id: operationId, type: 'MEMBERSHIP_RENEW', entityId: currentMembershipId, payload: { ...input, clientMembershipId: membershipId, clientPaymentId: paymentId }, occurredAt });

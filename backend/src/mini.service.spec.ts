@@ -51,23 +51,42 @@ describe('MiniService', () => {
     try {
       const membershipCreate = jest.fn().mockImplementation(({ data }) => ({ ...data }));
       const paymentCreate = jest.fn().mockImplementation(({ data }) => ({ id:'payment-1', ...data }));
+      const memberUpdate = jest.fn().mockResolvedValue({ id:'member-1', status:'ACTIVE' });
       const tx = {
+        member: { update:memberUpdate },
         membership: { updateMany:jest.fn(), findFirst:jest.fn().mockResolvedValue(null), create:membershipCreate, findUniqueOrThrow:jest.fn().mockResolvedValue({ id:'membership-1' }) },
         payment: { create:paymentCreate },
         paymentMovement: { create:jest.fn() },
       };
       const prisma = {
-        member: { findFirst:jest.fn().mockResolvedValue({ id:'member-1' }) },
-        plan: { findFirst:jest.fn().mockResolvedValue({ id:'plan-1', price:1000, durationDays:30 }) },
+        member: { findFirst:jest.fn().mockResolvedValue({ id:'member-1', status:'INACTIVE' }) },
+        plan: { findFirst:jest.fn().mockResolvedValue({ id:'plan-1', name:'Mensual original', price:1000, durationDays:30 }) },
         $transaction:jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
       };
       const service = new MiniService(prisma as never);
       await service.createMembership({ memberId:'member-1', planId:'plan-1', periodCount:3 }, user);
-      expect(membershipCreate).toHaveBeenCalledWith({ data:expect.objectContaining({ periodCount:3, startDate:new Date('2026-08-28T12:00:00.000Z') }) });
+      expect(prisma.member.findFirst).toHaveBeenCalledWith({ where:{ id:'member-1', gymId:'gym-1' } });
+      expect(membershipCreate).toHaveBeenCalledWith({ data:expect.objectContaining({
+        periodCount:3,
+        planName:'Mensual original',
+        planPrice:1000,
+        planDurationDays:30,
+        startDate:new Date('2026-08-28T12:00:00.000Z'),
+      }) });
       const endDate = membershipCreate.mock.calls[0][0].data.endDate as Date;
       expect([endDate.getFullYear(), endDate.getMonth(), endDate.getDate()]).toEqual([2026, 10, 26]);
       expect(paymentCreate).toHaveBeenCalledWith({ data:expect.objectContaining({ amount:3000 }) });
+      expect(memberUpdate).toHaveBeenCalledWith({ where:{ id:'member-1' }, data:{ status:'ACTIVE' } });
     } finally { jest.useRealTimers(); }
+  });
+
+  it('rechaza cantidades superiores a 24 períodos', async () => {
+    const prisma = {
+      member: { findFirst:jest.fn().mockResolvedValue({ id:'member-1' }) },
+      plan: { findFirst:jest.fn().mockResolvedValue({ id:'plan-1', price:1000, durationDays:30 }) },
+    };
+    const service = new MiniService(prisma as never);
+    await expect(service.createMembership({ memberId:'member-1', planId:'plan-1', periodCount:25 }, user)).rejects.toThrow('La cantidad de períodos debe ser un número entero entre 1 y 24');
   });
 
   it('permite al superadministrador actualizar todos los datos del gimnasio', async () => {
@@ -162,7 +181,8 @@ describe('MiniService', () => {
   it('permite cancelar una membresía activa sin cambiar su plan', async () => {
     const current = { id:'membership-1', planId:'plan-1', status:MembershipStatus.ACTIVE, startDate:new Date(), endDate:new Date(Date.now() + 86400000), member:{ status:'ACTIVE' }, payment:null };
     const updated = { ...current, status:MembershipStatus.CANCELLED };
-    const tx = { membership: { update: jest.fn().mockResolvedValue(updated), findUniqueOrThrow: jest.fn().mockResolvedValue(updated) } };
+    const memberUpdateMany = jest.fn().mockResolvedValue({ count:1 });
+    const tx = { member:{ updateMany:memberUpdateMany }, membership: { update: jest.fn().mockResolvedValue(updated), findUniqueOrThrow: jest.fn().mockResolvedValue(updated) } };
     const prisma = {
       gym: { findUnique: jest.fn().mockResolvedValue({ id:'gym-1' }) },
       membership: { findFirst: jest.fn().mockResolvedValue(current) },
@@ -171,6 +191,10 @@ describe('MiniService', () => {
     };
     const service = new MiniService(prisma as never);
     await expect(service.updateGymMembership('gym-1', 'member-1', 'membership-1', { planId:'plan-1', status:MembershipStatus.CANCELLED })).resolves.toMatchObject({ status:MembershipStatus.CANCELLED });
+    expect(memberUpdateMany).toHaveBeenCalledWith({
+      where:{ id:'member-1', memberships:{ none:{ status:MembershipStatus.ACTIVE, endDate:{ gte:expect.any(Date) } } } },
+      data:{ status:'INACTIVE' },
+    });
   });
 
   it('elimina desde móvil solamente una renovación programada del gimnasio autenticado', async () => {
@@ -227,6 +251,44 @@ describe('MiniService', () => {
     expect(remove).not.toHaveBeenCalled();
   });
 
+  it('archiva al miembro y cancela su membresía y cobro sin borrar el historial', async () => {
+    const memberUpdate = jest.fn().mockResolvedValue({ id:'member-1', status:'INACTIVE' });
+    const membershipUpdateMany = jest.fn().mockResolvedValue({ count:2 });
+    const paymentUpdateMany = jest.fn().mockResolvedValue({ count:2 });
+    const remove = jest.fn();
+    const tx = {
+      member: { update:memberUpdate },
+      membership: { updateMany:membershipUpdateMany },
+      payment: { updateMany:paymentUpdateMany },
+    };
+    const prisma = {
+      member: { findFirst:jest.fn().mockResolvedValue({ id:'member-1' }), delete:remove },
+      membership: {
+        count:jest.fn().mockResolvedValue(2),
+        findMany:jest.fn().mockResolvedValue([{ id:'membership-active' }, { id:'membership-scheduled' }]),
+      },
+      payment: { count:jest.fn().mockResolvedValue(2) },
+      $transaction:jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new MiniService(prisma as never);
+
+    await expect(service.deleteGymMember('gym-1', 'member-1')).resolves.toEqual({ id:'member-1', disposition:'ARCHIVED' });
+    expect(prisma.membership.findMany).toHaveBeenCalledWith({
+      where:{ memberId:'member-1', status:{ in:[MembershipStatus.ACTIVE, MembershipStatus.SCHEDULED] } },
+      select:{ id:true },
+    });
+    expect(paymentUpdateMany).toHaveBeenCalledWith({
+      where:{ gymId:'gym-1', memberId:'member-1', membershipId:{ in:['membership-active', 'membership-scheduled'] } },
+      data:{ status:PaymentStatus.CANCELLED },
+    });
+    expect(membershipUpdateMany).toHaveBeenCalledWith({
+      where:{ id:{ in:['membership-active', 'membership-scheduled'] }, memberId:'member-1' },
+      data:{ status:MembershipStatus.CANCELLED },
+    });
+    expect(memberUpdate).toHaveBeenCalledWith({ where:{ id:'member-1' }, data:{ status:'INACTIVE' } });
+    expect(remove).not.toHaveBeenCalled();
+  });
+
   it('elimina físicamente un miembro sin historial financiero', async () => {
     const remove = jest.fn().mockResolvedValue({ id: 'member-1' });
     const prisma = {
@@ -261,7 +323,7 @@ describe('MiniService', () => {
       payment: { updateMany: jest.fn().mockResolvedValue({ count: 0 }), findMany: jest.fn().mockResolvedValue([
         { amount: 1000, paidAmount: 250, status: PaymentStatus.PARTIAL },
         { amount: 500, paidAmount: 0, status: PaymentStatus.OVERDUE },
-        { amount: 300, paidAmount: 0, status: PaymentStatus.CANCELLED },
+        { amount: 300, paidAmount: 100, status: PaymentStatus.CANCELLED },
       ]) },
       paymentMovement: {
         aggregate: jest.fn().mockResolvedValue({ _sum: { amount: 250 } }),
@@ -270,7 +332,7 @@ describe('MiniService', () => {
     };
     const service = new MiniService(prisma as never);
     await expect(service.getGymFinances('gym-1')).resolves.toMatchObject({
-      totalBilled: 1800,
+      totalBilled: 1500,
       totalCollected: 250,
       pendingBalance: 1250,
       overdueBalance: 500,

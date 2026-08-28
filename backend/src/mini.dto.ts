@@ -97,7 +97,7 @@ export class CreateMembershipDto {
   @IsOptional() @IsDateString() occurredAt?: string;
   @IsString() memberId: string;
   @IsString() planId: string;
-  @IsOptional() @Type(() => Number) @IsInt() @IsIn([1, 2, 3, 6, 12]) periodCount?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(24) periodCount?: number;
   @IsOptional() @IsDateString() startDate?: string;
   @IsOptional() @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) initialPayment?: number;
   @IsOptional() @IsEnum(PaymentMethod) paymentMethod?: PaymentMethod;
@@ -110,7 +110,7 @@ export class AssignGymMembershipDto {
   @IsOptional() @IsUUID() clientMutationId?: string;
   @IsOptional() @IsDateString() occurredAt?: string;
   @IsString() planId: string;
-  @IsOptional() @Type(() => Number) @IsInt() @IsIn([1, 2, 3, 6, 12]) periodCount?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(24) periodCount?: number;
   @IsOptional() @IsDateString() startDate?: string;
   @IsOptional() @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) initialPayment?: number;
   @IsOptional() @IsEnum(PaymentMethod) paymentMethod?: PaymentMethod;
@@ -130,7 +130,7 @@ export class RenewMembershipDto {
   @IsOptional() @IsUUID() clientMutationId?: string;
   @IsOptional() @IsDateString() occurredAt?: string;
   @IsOptional() @IsString() planId?: string;
-  @IsOptional() @Type(() => Number) @IsInt() @IsIn([1, 2, 3, 6, 12]) periodCount?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(24) periodCount?: number;
   @IsOptional() @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) initialPayment?: number;
   @IsOptional() @IsEnum(PaymentMethod) paymentMethod?: PaymentMethod;
   @IsOptional() @IsString() @MaxLength(100) reference?: string;

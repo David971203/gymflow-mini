@@ -34,6 +34,13 @@ export class MembershipExpirationService implements OnModuleInit, OnModuleDestro
       },
       data: { status: MembershipStatus.ACTIVE },
     });
+    await this.prisma.member.updateMany({
+      where: {
+        status: 'INACTIVE',
+        memberships: { some: { status: MembershipStatus.ACTIVE, startDate: { lte: now }, endDate: { gte: now } } },
+      },
+      data: { status: 'ACTIVE' },
+    });
     return { expired: expired.count, activated: activated.count };
   }
 

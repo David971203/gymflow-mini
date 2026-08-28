@@ -20,7 +20,7 @@ async function main() {
   const member = await prisma.member.upsert({ where: { id: `demo-member-${gym.id}` }, update: { ci: '90010112345' }, create: { id: `demo-member-${gym.id}`, gymId: gym.id, ci: '90010112345', firstName: 'Alejandro', lastName: 'Pérez', phone: '+53 5 555 0192', address: 'Centro Habana' } });
   const membershipId = `demo-membership-${member.id}`;
   const startDate = new Date(); const endDate = new Date(); endDate.setDate(endDate.getDate() + 30);
-  await prisma.membership.upsert({ where: { id: membershipId }, update: {}, create: { id: membershipId, memberId: member.id, planId: monthly.id, startDate, endDate } });
+  await prisma.membership.upsert({ where: { id: membershipId }, update: {}, create: { id:membershipId, memberId:member.id, planId:monthly.id, planName:monthly.name, planPrice:monthly.price, planDurationDays:monthly.durationDays, startDate, endDate } });
   const payment = await prisma.payment.upsert({ where: { membershipId }, update: {}, create: { gymId: gym.id, memberId: member.id, membershipId, amount: monthly.price, paidAmount: 1500, dueDate: startDate, status: PaymentStatus.PARTIAL } });
   if ((await prisma.paymentMovement.count({ where: { paymentId: payment.id } })) === 0) await prisma.paymentMovement.create({ data: { paymentId: payment.id, actorUserId: admin.id, amount: 1500, method: PaymentMethod.CASH, reference: 'Abono inicial demo' } });
 

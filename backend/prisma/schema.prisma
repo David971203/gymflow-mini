@@ -150,6 +150,10 @@ model Membership {
   member           Member           @relation(fields: [memberId], references: [id])
   planId           String
   plan             Plan             @relation(fields: [planId], references: [id])
+  /// Condiciones inmutables del plan en el momento de contratar la membresía.
+  planName         String
+  planPrice        Decimal          @db.Decimal(12, 2)
+  planDurationDays Int
   startDate        DateTime
   endDate          DateTime
   periodCount      Int              @default(1)

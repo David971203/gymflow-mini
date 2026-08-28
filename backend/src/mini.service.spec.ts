@@ -203,13 +203,43 @@ describe('MiniService', () => {
     });
   });
 
+  it('resume las suscripciones e ingresos propios de GymFlow Mini', async () => {
+    const gymCount = jest.fn();
+    [3,3,1,1,1,0].forEach(value => gymCount.mockResolvedValueOnce(value));
+    const memberCount = jest.fn();
+    [341,38,21,28,25,31,34,38].forEach(value => memberCount.mockResolvedValueOnce(value));
+    const subscriptionAggregate = jest.fn()
+      .mockResolvedValueOnce({ _sum:{ amount:55000 } })
+      .mockResolvedValueOnce({ _sum:{ amount:105000 } });
+    const service = new MiniService({
+      gym:{ count:gymCount },
+      member:{ count:memberCount },
+      paymentMovement:{ aggregate:jest.fn().mockResolvedValue({ _sum:{ amount:98050 } }) },
+      payment:{ findMany:jest.fn().mockResolvedValue([{ amount:15000, paidAmount:2700 }]) },
+      platformSubscription:{ aggregate:subscriptionAggregate },
+    } as never);
+    await expect(service.platformOverview()).resolves.toMatchObject({
+      gyms:3,
+      activeGyms:3,
+      subscriptionMonthlyRevenue:55000,
+      subscriptionTotalRevenue:105000,
+      activeTrialSubscriptions:1,
+      activeMonthlySubscriptions:1,
+      activeAnnualSubscriptions:1,
+      expiredSubscriptions:0,
+    });
+  });
+
   it('renueva desde hoy una suscripción vencida', async () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-08-27T12:00:00.000Z'));
     try {
       const update = jest.fn().mockImplementation(({ data }) => ({ id:'gym-1', ...data }));
-      const service = new MiniService({ gym: { findUnique: jest.fn().mockResolvedValue({ id:'gym-1', subscriptionTrialDays:7, subscriptionEndsAt:new Date('2026-08-20T12:00:00.000Z') }), update } } as never);
+      const create = jest.fn().mockResolvedValue({ id:'subscription-1' });
+      const transaction = jest.fn().mockImplementation(async callback => callback({ gym:{ update }, platformSubscription:{ create } }));
+      const service = new MiniService({ gym: { findUnique: jest.fn().mockResolvedValue({ id:'gym-1', subscriptionTrialDays:7, subscriptionEndsAt:new Date('2026-08-20T12:00:00.000Z') }) }, $transaction:transaction } as never);
       await service.renewGymSubscription('gym-1',GymSubscriptionPlan.MONTHLY);
       expect(update).toHaveBeenCalledWith({ where:{ id:'gym-1' }, data:{ subscriptionPlan:GymSubscriptionPlan.MONTHLY, subscriptionTrialDays:7, subscriptionStartedAt:new Date('2026-08-27T12:00:00.000Z'), subscriptionEndsAt:new Date('2026-09-27T12:00:00.000Z') } });
+      expect(create).toHaveBeenCalledWith({ data:{ gymId:'gym-1', plan:GymSubscriptionPlan.MONTHLY, amount:5000, startedAt:new Date('2026-08-27T12:00:00.000Z'), endsAt:new Date('2026-09-27T12:00:00.000Z') } });
     } finally { jest.useRealTimers(); }
   });
 
@@ -217,10 +247,13 @@ describe('MiniService', () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-08-27T12:00:00.000Z'));
     try {
       const update = jest.fn().mockImplementation(({ data }) => ({ id:'gym-1', ...data }));
-      const service = new MiniService({ gym: { findUnique: jest.fn().mockResolvedValue({ id:'gym-1', subscriptionEndsAt:new Date('2026-09-10T12:00:00.000Z') }), update } } as never);
+      const create = jest.fn().mockResolvedValue({ id:'subscription-1' });
+      const transaction = jest.fn().mockImplementation(async callback => callback({ gym:{ update }, platformSubscription:{ create } }));
+      const service = new MiniService({ gym: { findUnique: jest.fn().mockResolvedValue({ id:'gym-1', subscriptionEndsAt:new Date('2026-09-10T12:00:00.000Z') }) }, $transaction:transaction } as never);
       await service.renewGymSubscription('gym-1',GymSubscriptionPlan.ANNUAL);
       expect(update.mock.calls[0][0].data.subscriptionStartedAt).toEqual(new Date('2026-09-10T12:00:00.000Z'));
       expect(update.mock.calls[0][0].data.subscriptionEndsAt).toEqual(new Date('2027-09-10T12:00:00.000Z'));
+      expect(create.mock.calls[0][0].data.amount).toBe(50000);
     } finally { jest.useRealTimers(); }
   });
 
@@ -228,9 +261,12 @@ describe('MiniService', () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-08-27T12:00:00.000Z'));
     try {
       const update = jest.fn().mockImplementation(({ data }) => ({ id:'gym-1', ...data }));
-      const service = new MiniService({ gym: { findUnique: jest.fn().mockResolvedValue({ id:'gym-1', subscriptionTrialDays:7, subscriptionEndsAt:new Date('2026-08-20T12:00:00.000Z') }), update } } as never);
+      const create = jest.fn().mockResolvedValue({ id:'subscription-1' });
+      const transaction = jest.fn().mockImplementation(async callback => callback({ gym:{ update }, platformSubscription:{ create } }));
+      const service = new MiniService({ gym: { findUnique: jest.fn().mockResolvedValue({ id:'gym-1', subscriptionTrialDays:7, subscriptionEndsAt:new Date('2026-08-20T12:00:00.000Z') }) }, $transaction:transaction } as never);
       await service.renewGymSubscription('gym-1',GymSubscriptionPlan.TRIAL,14);
       expect(update).toHaveBeenCalledWith({ where:{ id:'gym-1' }, data:{ subscriptionPlan:GymSubscriptionPlan.TRIAL, subscriptionTrialDays:14, subscriptionStartedAt:new Date('2026-08-27T12:00:00.000Z'), subscriptionEndsAt:new Date('2026-09-10T12:00:00.000Z') } });
+      expect(create.mock.calls[0][0].data.amount).toBe(0);
     } finally { jest.useRealTimers(); }
   });
 });

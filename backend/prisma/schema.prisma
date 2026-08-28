@@ -64,6 +64,21 @@ model Gym {
   plans    Plan[]
   payments Payment[]
   syncReceipts SyncReceipt[]
+  platformSubscriptions PlatformSubscription[]
+}
+
+model PlatformSubscription {
+  id          String              @id @default(uuid())
+  gymId       String
+  gym         Gym                 @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  plan        GymSubscriptionPlan
+  amount      Decimal             @db.Decimal(12, 2)
+  startedAt   DateTime
+  endsAt      DateTime
+  activatedAt DateTime            @default(now())
+
+  @@index([gymId, activatedAt])
+  @@index([activatedAt])
 }
 
 model User {

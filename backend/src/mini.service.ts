@@ -11,6 +11,12 @@ const membershipInclude = {
   payment: { include: { movements: { orderBy: { occurredAt: 'desc' as const } } } },
 } satisfies Prisma.MembershipInclude;
 
+const PLATFORM_SUBSCRIPTION_PRICES: Record<GymSubscriptionPlan, number> = {
+  [GymSubscriptionPlan.TRIAL]: 0,
+  [GymSubscriptionPlan.MONTHLY]: 5000,
+  [GymSubscriptionPlan.ANNUAL]: 50000,
+};
+
 @Injectable()
 export class MiniService {
   constructor(private readonly prisma: PrismaService) {}
@@ -34,7 +40,9 @@ export class MiniService {
     return this.prisma.$transaction(async (tx) => {
       const subscriptionStartedAt = new Date();
       const subscriptionTrialDays = dto.subscriptionTrialDays ?? 7;
-      const gym = await tx.gym.create({ data: { name: dto.name, slug: dto.slug.toLowerCase(), province: dto.province, phone: dto.phone, currency: dto.currency, subscriptionPlan: dto.subscriptionPlan, subscriptionTrialDays, subscriptionStartedAt, subscriptionEndsAt: this.subscriptionEnd(subscriptionStartedAt, dto.subscriptionPlan, subscriptionTrialDays) } });
+      const subscriptionEndsAt = this.subscriptionEnd(subscriptionStartedAt, dto.subscriptionPlan, subscriptionTrialDays);
+      const gym = await tx.gym.create({ data: { name: dto.name, slug: dto.slug.toLowerCase(), province: dto.province, phone: dto.phone, currency: dto.currency, subscriptionPlan: dto.subscriptionPlan, subscriptionTrialDays, subscriptionStartedAt, subscriptionEndsAt } });
+      await tx.platformSubscription.create({ data: { gymId: gym.id, plan: dto.subscriptionPlan, amount: PLATFORM_SUBSCRIPTION_PRICES[dto.subscriptionPlan], startedAt: subscriptionStartedAt, endsAt: subscriptionEndsAt } });
       await tx.user.create({ data: { email: dto.adminEmail.toLowerCase(), passwordHash: await argon2.hash(dto.adminPassword), name: dto.adminName, role: UserRole.ADMIN, gymId: gym.id } });
       return gym;
     });
@@ -78,7 +86,12 @@ export class MiniService {
     const now = new Date();
     const subscriptionStartedAt = gym.subscriptionEndsAt > now ? gym.subscriptionEndsAt : now;
     const subscriptionTrialDays = requestedTrialDays ?? gym.subscriptionTrialDays ?? 7;
-    return this.prisma.gym.update({ where: { id }, data: { subscriptionPlan, subscriptionTrialDays, subscriptionStartedAt, subscriptionEndsAt: this.subscriptionEnd(subscriptionStartedAt, subscriptionPlan, subscriptionTrialDays) } });
+    const subscriptionEndsAt = this.subscriptionEnd(subscriptionStartedAt, subscriptionPlan, subscriptionTrialDays);
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.gym.update({ where: { id }, data: { subscriptionPlan, subscriptionTrialDays, subscriptionStartedAt, subscriptionEndsAt } });
+      await tx.platformSubscription.create({ data: { gymId: id, plan: subscriptionPlan, amount: PLATFORM_SUBSCRIPTION_PRICES[subscriptionPlan], startedAt: subscriptionStartedAt, endsAt: subscriptionEndsAt } });
+      return updated;
+    });
   }
 
   async listGymAdmins(gymId: string) {
@@ -317,23 +330,42 @@ export class MiniService {
   async platformOverview() {
     const start = new Date(); start.setDate(1); start.setHours(0, 0, 0, 0);
     const nextMonth = new Date(start); nextMonth.setMonth(nextMonth.getMonth() + 1);
+    const now = new Date();
     const trendMonths = Array.from({ length: 6 }, (_, index) => {
       const monthStart = new Date(start); monthStart.setMonth(monthStart.getMonth() - (5 - index));
       const monthEnd = new Date(monthStart); monthEnd.setMonth(monthEnd.getMonth() + 1);
       return { monthStart, monthEnd };
     });
-    const [gyms, activeGyms, members, newMembers, revenue, debtRows, ...memberTrendCounts] = await Promise.all([
+    const activeSubscriptionWhere = { isActive: true, subscriptionEndsAt: { gt: now } } satisfies Prisma.GymWhereInput;
+    const [gyms, activeGyms, members, newMembers, revenue, debtRows, subscriptionMonthlyRevenue, subscriptionTotalRevenue, activeTrialSubscriptions, activeMonthlySubscriptions, activeAnnualSubscriptions, expiredSubscriptions, ...memberTrendCounts] = await Promise.all([
       this.prisma.gym.count(),
       this.prisma.gym.count({ where: { isActive: true } }),
       this.prisma.member.count({ where: { status: 'ACTIVE' } }),
       this.prisma.member.count({ where: { joinedAt: { gte: start, lt: nextMonth } } }),
       this.prisma.paymentMovement.aggregate({ where: { occurredAt: { gte: start, lt: nextMonth } }, _sum: { amount: true } }),
       this.prisma.payment.findMany({ where: { status: { in: [PaymentStatus.PENDING, PaymentStatus.PARTIAL, PaymentStatus.OVERDUE] } }, select: { amount: true, paidAmount: true } }),
+      this.prisma.platformSubscription.aggregate({ where: { activatedAt: { gte: start, lt: nextMonth } }, _sum: { amount: true } }),
+      this.prisma.platformSubscription.aggregate({ _sum: { amount: true } }),
+      this.prisma.gym.count({ where: { ...activeSubscriptionWhere, subscriptionPlan: GymSubscriptionPlan.TRIAL } }),
+      this.prisma.gym.count({ where: { ...activeSubscriptionWhere, subscriptionPlan: GymSubscriptionPlan.MONTHLY } }),
+      this.prisma.gym.count({ where: { ...activeSubscriptionWhere, subscriptionPlan: GymSubscriptionPlan.ANNUAL } }),
+      this.prisma.gym.count({ where: { subscriptionEndsAt: { lte: now } } }),
       ...trendMonths.map(({ monthStart, monthEnd }) => this.prisma.member.count({ where: { joinedAt: { gte: monthStart, lt: monthEnd } } })),
     ]);
     const debt = debtRows.reduce((sum, row) => sum + Number(row.amount) - Number(row.paidAmount), 0);
     const memberTrend = trendMonths.map(({ monthStart }, index) => ({ month: monthStart.toISOString().slice(0, 7), members: memberTrendCounts[index] }));
-    return { gyms, activeGyms, members, newMembers, monthlyRevenue: Number(revenue._sum.amount ?? 0), pendingDebt: Number(debt.toFixed(2)), memberTrend };
+    return {
+      gyms, activeGyms, members, newMembers,
+      monthlyRevenue: Number(revenue._sum.amount ?? 0),
+      pendingDebt: Number(debt.toFixed(2)),
+      memberTrend,
+      subscriptionMonthlyRevenue: Number(subscriptionMonthlyRevenue._sum.amount ?? 0),
+      subscriptionTotalRevenue: Number(subscriptionTotalRevenue._sum.amount ?? 0),
+      activeTrialSubscriptions,
+      activeMonthlySubscriptions,
+      activeAnnualSubscriptions,
+      expiredSubscriptions,
+    };
   }
 
   async createMember(dto: CreateMemberDto, user: AuthUser) {

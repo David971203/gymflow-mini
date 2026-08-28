@@ -5,7 +5,7 @@ import { FormEvent, MouseEvent, useCallback, useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 
 type MemberTrendPoint = { month: string; members: number };
-type Overview = { gyms: number; activeGyms: number; members: number; newMembers: number; monthlyRevenue: number; pendingDebt: number; memberTrend: MemberTrendPoint[] };
+type Overview = { gyms: number; activeGyms: number; members: number; newMembers: number; monthlyRevenue: number; pendingDebt: number; memberTrend: MemberTrendPoint[]; subscriptionMonthlyRevenue: number; subscriptionTotalRevenue: number; activeTrialSubscriptions: number; activeMonthlySubscriptions: number; activeAnnualSubscriptions: number; expiredSubscriptions: number };
 type Admin = { id: string; name: string; email: string; isActive: boolean; createdAt?: string };
 type Plan = { id: string; name: string; description?: string; price: number | string; durationDays: number; isActive: boolean; createdAt?: string; updatedAt?: string };
 type DeleteOutcome = { id: string; disposition: "DELETED" | "ARCHIVED" };
@@ -38,7 +38,7 @@ type Gym = {
 const API = `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3100"}/api`;
 const demoSubscriptionEnd = new Date(); demoSubscriptionEnd.setFullYear(demoSubscriptionEnd.getFullYear() + 1);
 const recentMonthKeys = () => Array.from({ length: 6 }, (_, index) => { const date = new Date(); date.setDate(1); date.setMonth(date.getMonth() - (5 - index)); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`; });
-const demoOverview: Overview = { gyms: 3, activeGyms: 3, members: 341, newMembers: 38, monthlyRevenue: 98050, pendingDebt: 12300, memberTrend: recentMonthKeys().map((month, index) => ({ month, members: [21, 28, 25, 31, 34, 38][index] })) };
+const demoOverview: Overview = { gyms: 3, activeGyms: 3, members: 341, newMembers: 38, monthlyRevenue: 98050, pendingDebt: 12300, memberTrend: recentMonthKeys().map((month, index) => ({ month, members: [21, 28, 25, 31, 34, 38][index] })), subscriptionMonthlyRevenue:55000, subscriptionTotalRevenue:55000, activeTrialSubscriptions:1, activeMonthlySubscriptions:1, activeAnnualSubscriptions:1, expiredSubscriptions:0 };
 const demoGyms: Gym[] = [
   { id: "1", name: "Habana Fitness", slug: "habana-fitness", province: "La Habana", phone: "+53 5 123 4567", currency: "CUP", isActive: true, subscriptionPlan:"ANNUAL", subscriptionTrialDays:7, subscriptionStartedAt:new Date().toISOString(), subscriptionEndsAt:demoSubscriptionEnd.toISOString(), _count: { members: 184, plans: 3, payments: 172 }, users: [{ id: "a1", name: "Laura", email: "admin@habanafitness.cu", isActive: true }] },
   { id: "2", name: "Titan Gym", slug: "titan-gym", province: "Villa Clara", currency: "CUP", isActive: true, subscriptionPlan:"MONTHLY", subscriptionTrialDays:7, subscriptionStartedAt:new Date().toISOString(), subscriptionEndsAt:demoSubscriptionEnd.toISOString(), _count: { members: 96, plans: 2, payments: 88 }, users: [{ id: "a2", name: "Carlos", email: "admin@titangym.cu", isActive: true }] },
@@ -156,13 +156,15 @@ export default function Home() {
       {!isGymsPage && <><div className="metrics">
         <article><span>Gimnasios activos</span><strong>{overview?.activeGyms ?? "—"}</strong><small>{overview?.gyms ?? 0} registrados</small></article>
         <article><span>Miembros registrados</span><strong>{overview?.members ?? "—"}</strong><small className="positive">+{overview?.newMembers ?? 0} este mes</small></article>
-        <article><span>Ingresos registrados</span><strong>{currency(overview?.monthlyRevenue)} <i>CUP</i></strong><small>Mes actual</small></article>
-        <article><span>Cobros pendientes</span><strong>{currency(overview?.pendingDebt)} <i>CUP</i></strong><small className="warning">Saldo acumulado</small></article>
+        <article><span>Ingresos por suscripciones</span><strong>{currency(overview?.subscriptionMonthlyRevenue)} <i>CUP</i></strong><small>Activaciones del mes</small></article>
+        <article><span>Ingresos acumulados</span><strong>{currency(overview?.subscriptionTotalRevenue)} <i>CUP</i></strong><small>Mensuales y anuales</small></article>
       </div>
+
+      <article className="panel subscription-overview"><div className="panel-title"><div><h2>Suscripciones de GymFlow Mini</h2><p>Estado actual de los planes contratados por los gimnasios.</p></div><span>Mensual 5 000 CUP · Anual 50 000 CUP</span></div><div className="subscription-stats"><div><span>Pruebas activas</span><strong>{overview?.activeTrialSubscriptions ?? 0}</strong><small>Sin ingreso</small></div><div><span>Mensuales activas</span><strong>{overview?.activeMonthlySubscriptions ?? 0}</strong><small>5 000 CUP por activación</small></div><div><span>Anuales activas</span><strong>{overview?.activeAnnualSubscriptions ?? 0}</strong><small>50 000 CUP por activación</small></div><div className={(overview?.expiredSubscriptions??0)>0?"attention":""}><span>Vencidas</span><strong>{overview?.expiredSubscriptions ?? 0}</strong><small>Solo consulta</small></div></div></article>
 
       <div className="content-grid" id="finanzas">
         <article className="panel trend"><div className="panel-title"><div><h2>Actividad de la plataforma</h2><p>Nuevos miembros registrados en los últimos 6 meses</p></div><span>6 meses</span></div><div className="chart" aria-label="Nuevos miembros registrados por mes">{memberTrend.map(point=><div key={point.month} className="bar-wrap" title={`${point.members} miembros`}><div className="bar" style={{height:`${Math.max(point.members > 0 ? 8 : 0, (point.members / trendMaximum) * 100)}%`}}/><strong>{point.members}</strong><small>{monthLabel(point.month)}</small></div>)}</div></article>
-        <article className="panel pulse"><div className="panel-title"><div><h2>Señales del piloto</h2><p>Indicadores que conviene medir</p></div></div><div className="signal"><span>Crecimiento este mes</span><strong>+{overview?.newMembers ?? 0}</strong></div><div className="signal"><span>Gimnasios operando</span><strong>{overview?.activeGyms ?? 0}/{overview?.gyms ?? 0}</strong></div><div className="signal"><span>Ingreso por miembro</span><strong>{currency((overview?.monthlyRevenue ?? 0) / Math.max(overview?.members ?? 1,1))}</strong></div></article>
+        <article className="panel pulse"><div className="panel-title"><div><h2>Operación de los gimnasios</h2><p>Información generada por sus miembros y cobros.</p></div></div><div className="signal"><span>Nuevos miembros este mes</span><strong>+{overview?.newMembers ?? 0}</strong></div><div className="signal"><span>Cobrado por los gimnasios</span><strong>{currency(overview?.monthlyRevenue)}</strong></div><div className="signal"><span>Saldo pendiente</span><strong>{currency(overview?.pendingDebt)}</strong></div></article>
       </div></>}
 
       {isGymsPage && <article className="panel gym-table">

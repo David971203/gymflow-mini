@@ -8,6 +8,10 @@ const mono = Geist_Mono({ variable: "--font-mono", subsets: ["latin"] });
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "https://gymflow-mini-cuba.david9712.chatgpt.site"),
   title: "GymFlow Mini | Plataforma",
+  icons: {
+    icon: [{ url: "/favicon.svg", type: "image/svg+xml" }],
+    shortcut: "/favicon.svg",
+  },
   description: "Panel de operación para validar la digitalización de gimnasios cubanos.",
   openGraph: {
     title: "GymFlow Mini",

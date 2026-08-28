@@ -116,7 +116,7 @@ export const offline = {
       activeMemberships,
       monthlyRevenue: Number(monthly.reduce((sum, movement) => sum + Number(movement.amount), 0).toFixed(2)),
       pendingDebt: Number(payments.reduce((sum, payment) => sum + Math.max(0, Number(payment.amount) - Number(payment.paidAmount)), 0).toFixed(2)),
-      recentPayments: movements.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt)).slice(0, 5),
+      recentPayments: monthly.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt)).slice(0, 5),
     };
   },
 
@@ -220,7 +220,7 @@ export const offline = {
       const status = initial === 0 ? 'PENDING' : initial >= total ? 'PAID' : 'PARTIAL';
       const movements: Movement[] = initial > 0 ? [{ id: operationId, amount: String(initial), occurredAt }] : [];
       const membership: Membership = { id: membershipId, status: 'ACTIVE', startDate: startDate.toISOString(), endDate: endDate.toISOString(), plan };
-      const payment: Payment = { id: paymentId, amount: String(total), paidAmount: String(initial), status, member, membership: { id: membershipId, plan }, movements };
+      const payment: Payment = { id: paymentId, amount: String(total), paidAmount: String(initial), status, createdAt: occurredAt, dueDate: startDate.toISOString(), member, membership: { id: membershipId, plan }, movements };
       member.memberships.unshift(membership); payments.unshift(payment);
       await writeCache(scope, 'members', members); await writeCache(scope, 'payments', payments);
       await enqueue(scope, { id: operationId, type: 'MEMBERSHIP_ASSIGN', entityId: membershipId, payload: { ...input, clientPaymentId: paymentId }, occurredAt });
@@ -325,7 +325,7 @@ export function syncNow(scope: string): Promise<SyncState> {
 
 async function performSync(scope: string): Promise<SyncState> {
   const network = await Network.getNetworkStateAsync().catch(() => null);
-  if (network?.isConnected === false || network?.isInternetReachable === false) return updateState(scope, 'OFFLINE', { message: 'Trabajando sin conexión' });
+  if (network?.isConnected === false) return updateState(scope, 'OFFLINE', { message: 'Trabajando sin conexión' });
   await updateState(scope, 'SYNCING', { message: 'Enviando cambios…' });
   try {
     while (true) {
@@ -354,6 +354,7 @@ async function performSync(scope: string): Promise<SyncState> {
     return updateState(scope, 'SYNCED', { lastSync: snapshot.serverTime, message: undefined });
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) return updateState(scope, 'ERROR', { message: 'Conéctate e inicia sesión otra vez para sincronizar' });
+    if (error instanceof ApiError) return updateState(scope, 'ERROR', { message: error.message });
     return updateState(scope, 'OFFLINE', { message: 'Cambios guardados; se enviarán al recuperar conexión' });
   }
 }

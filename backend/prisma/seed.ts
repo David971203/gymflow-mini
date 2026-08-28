@@ -1,13 +1,14 @@
-import { PaymentMethod, PaymentStatus, PrismaClient, UserRole } from '@prisma/client';
+import { GymSubscriptionPlan, PaymentMethod, PaymentStatus, PrismaClient, UserRole } from '@prisma/client';
 import * as argon2 from 'argon2';
 
 const prisma = new PrismaClient();
 
 async function main() {
+  const subscriptionStartedAt = new Date(); const subscriptionEndsAt = new Date(subscriptionStartedAt); subscriptionEndsAt.setFullYear(subscriptionEndsAt.getFullYear() + 1);
   const gym = await prisma.gym.upsert({
     where: { slug: 'habana-fitness' },
-    update: {},
-    create: { name: 'Habana Fitness', slug: 'habana-fitness', province: 'La Habana', phone: '+53 5 123 4567' },
+    update: { subscriptionPlan: GymSubscriptionPlan.ANNUAL, subscriptionStartedAt, subscriptionEndsAt },
+    create: { name: 'Habana Fitness', slug: 'habana-fitness', province: 'La Habana', phone: '+53 5 123 4567', subscriptionPlan: GymSubscriptionPlan.ANNUAL, subscriptionStartedAt, subscriptionEndsAt },
   });
   await prisma.user.upsert({ where: { email: 'super@gymflowmini.cu' }, update: {}, create: { email: 'super@gymflowmini.cu', passwordHash: await argon2.hash('SuperMini123!'), name: 'David', role: UserRole.SUPER_ADMIN } });
   const admin = await prisma.user.upsert({ where: { email: 'admin@habanafitness.cu' }, update: {}, create: { email: 'admin@habanafitness.cu', passwordHash: await argon2.hash('AdminMini123!'), name: 'Administrador Habana Fitness', role: UserRole.ADMIN, gymId: gym.id } });

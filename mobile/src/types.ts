@@ -1,9 +1,10 @@
 export type Tab = 'INICIO' | 'MIEMBROS' | 'PLANES' | 'CAJA' | 'CUENTA';
 export type Currency = 'CUP' | 'USD';
-export type User = { id: string; email: string; name: string; role: 'ADMIN'; gymId: string; gym: { name: string; currency: Currency } };
+export type GymSubscriptionPlan = 'TRIAL' | 'MONTHLY' | 'ANNUAL';
+export type User = { id: string; email: string; name: string; role: 'ADMIN'; gymId: string; gym: { name: string; currency: Currency; subscriptionPlan: GymSubscriptionPlan; subscriptionTrialDays: number; subscriptionStartedAt: string; subscriptionEndsAt: string } };
 export type Dashboard = { members: number; activeMemberships: number; monthlyRevenue: number; pendingDebt: number; recentPayments: Movement[] };
 export type Plan = { id: string; name: string; description?: string; price: string; durationDays: number; isActive: boolean };
-export type Payment = { id: string; amount: string; paidAmount: string; status: string; member: Member; membership: { id?: string; plan: Plan }; movements: Movement[] };
+export type Payment = { id: string; amount: string; paidAmount: string; status: string; createdAt?: string; dueDate?: string | null; member: Member; membership: { id?: string; plan: Plan }; movements: Movement[] };
 export type Movement = { id: string; amount: string; occurredAt: string; payment?: { member: Member } };
 export type Membership = { id: string; status: string; startDate: string; endDate: string; plan: Plan; payment?: Payment };
 export type MemberSex = 'MALE' | 'FEMALE' | 'OTHER';

@@ -3,7 +3,7 @@ import { ApiTags } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import { CurrentUser, Roles, type AuthUser } from './common';
 import { MiniService } from './mini.service';
-import { ApplyPaymentDto, AssignGymMembershipDto, CreateGymAdminDto, CreateGymDto, CreateMemberDto, CreateMembershipDto, CreatePlanDto, RenewMembershipDto, UpdateGymAdminDto, UpdateGymDto, UpdateGymMembershipDto, UpdateGymStatusDto, UpdateMemberDto, UpdatePlanDto } from './mini.dto';
+import { ApplyPaymentDto, AssignGymMembershipDto, CreateGymAdminDto, CreateGymDto, CreateMemberDto, CreateMembershipDto, CreatePlanDto, RenewMembershipDto, UpdateGymAdminDto, UpdateGymDto, UpdateGymMembershipDto, UpdateGymStatusDto, UpdateGymSubscriptionDto, UpdateMemberDto, UpdatePlanDto } from './mini.dto';
 
 @ApiTags('super-admin')
 @Controller('platform')
@@ -16,6 +16,7 @@ export class PlatformController {
   @Get('gyms/:id') gym(@Param('id') id: string) { return this.mini.getGym(id); }
   @Patch('gyms/:id') updateGym(@Param('id') id: string, @Body() dto: UpdateGymDto) { return this.mini.updateGym(id, dto); }
   @Patch('gyms/:id/status') status(@Param('id') id: string, @Body() dto: UpdateGymStatusDto) { return this.mini.updateGymStatus(id, dto.isActive); }
+  @Patch('gyms/:id/subscription') subscription(@Param('id') id: string, @Body() dto: UpdateGymSubscriptionDto) { return this.mini.renewGymSubscription(id, dto.subscriptionPlan, dto.subscriptionTrialDays); }
   @Get('gyms/:gymId/admins') admins(@Param('gymId') gymId: string) { return this.mini.listGymAdmins(gymId); }
   @Post('gyms/:gymId/admins') createAdmin(@Param('gymId') gymId: string, @Body() dto: CreateGymAdminDto) { return this.mini.createGymAdmin(gymId, dto); }
   @Patch('gyms/:gymId/admins/:id') updateAdmin(@Param('gymId') gymId: string, @Param('id') id: string, @Body() dto: UpdateGymAdminDto) { return this.mini.updateGymAdmin(gymId, id, dto); }

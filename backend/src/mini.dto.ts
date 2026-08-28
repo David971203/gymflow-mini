@@ -1,4 +1,4 @@
-import { MembershipStatus, PaymentMethod } from '@prisma/client';
+import { GymSubscriptionPlan, MembershipStatus, PaymentMethod } from '@prisma/client';
 import { Type } from 'class-transformer';
 import { IsArray, IsBoolean, IsDateString, IsEmail, IsEnum, IsIn, IsInt, IsNumber, IsObject, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, MinLength, ArrayMaxSize, ArrayMinSize, ValidateNested } from 'class-validator';
 
@@ -11,9 +11,15 @@ export class CreateGymDto {
   @IsEmail() adminEmail: string;
   @IsString() @MinLength(8) adminPassword: string;
   @IsString() @MaxLength(100) adminName: string;
+  @IsEnum(GymSubscriptionPlan) subscriptionPlan: GymSubscriptionPlan;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(365) subscriptionTrialDays?: number;
 }
 
 export class UpdateGymStatusDto { @IsBoolean() isActive: boolean; }
+export class UpdateGymSubscriptionDto {
+  @IsEnum(GymSubscriptionPlan) subscriptionPlan: GymSubscriptionPlan;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(365) subscriptionTrialDays?: number;
+}
 
 export class UpdateGymDto {
   @IsOptional() @IsString() @MaxLength(100) name?: string;

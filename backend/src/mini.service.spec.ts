@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
-import { PaymentStatus, Prisma } from '@prisma/client';
+import { GymSubscriptionPlan, PaymentStatus, Prisma } from '@prisma/client';
 import { MiniService } from './mini.service';
 
 describe('MiniService', () => {
@@ -201,5 +201,36 @@ describe('MiniService', () => {
       monthlyRevenue: 250,
       pendingPayments: 2,
     });
+  });
+
+  it('renueva desde hoy una suscripción vencida', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-08-27T12:00:00.000Z'));
+    try {
+      const update = jest.fn().mockImplementation(({ data }) => ({ id:'gym-1', ...data }));
+      const service = new MiniService({ gym: { findUnique: jest.fn().mockResolvedValue({ id:'gym-1', subscriptionTrialDays:7, subscriptionEndsAt:new Date('2026-08-20T12:00:00.000Z') }), update } } as never);
+      await service.renewGymSubscription('gym-1',GymSubscriptionPlan.MONTHLY);
+      expect(update).toHaveBeenCalledWith({ where:{ id:'gym-1' }, data:{ subscriptionPlan:GymSubscriptionPlan.MONTHLY, subscriptionTrialDays:7, subscriptionStartedAt:new Date('2026-08-27T12:00:00.000Z'), subscriptionEndsAt:new Date('2026-09-27T12:00:00.000Z') } });
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('extiende desde el vencimiento una suscripción que todavía está activa', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-08-27T12:00:00.000Z'));
+    try {
+      const update = jest.fn().mockImplementation(({ data }) => ({ id:'gym-1', ...data }));
+      const service = new MiniService({ gym: { findUnique: jest.fn().mockResolvedValue({ id:'gym-1', subscriptionEndsAt:new Date('2026-09-10T12:00:00.000Z') }), update } } as never);
+      await service.renewGymSubscription('gym-1',GymSubscriptionPlan.ANNUAL);
+      expect(update.mock.calls[0][0].data.subscriptionStartedAt).toEqual(new Date('2026-09-10T12:00:00.000Z'));
+      expect(update.mock.calls[0][0].data.subscriptionEndsAt).toEqual(new Date('2027-09-10T12:00:00.000Z'));
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('permite configurar los días al asignar una prueba gratuita', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-08-27T12:00:00.000Z'));
+    try {
+      const update = jest.fn().mockImplementation(({ data }) => ({ id:'gym-1', ...data }));
+      const service = new MiniService({ gym: { findUnique: jest.fn().mockResolvedValue({ id:'gym-1', subscriptionTrialDays:7, subscriptionEndsAt:new Date('2026-08-20T12:00:00.000Z') }), update } } as never);
+      await service.renewGymSubscription('gym-1',GymSubscriptionPlan.TRIAL,14);
+      expect(update).toHaveBeenCalledWith({ where:{ id:'gym-1' }, data:{ subscriptionPlan:GymSubscriptionPlan.TRIAL, subscriptionTrialDays:14, subscriptionStartedAt:new Date('2026-08-27T12:00:00.000Z'), subscriptionEndsAt:new Date('2026-09-10T12:00:00.000Z') } });
+    } finally { jest.useRealTimers(); }
   });
 });

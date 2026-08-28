@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { MembershipStatus, PaymentStatus, Prisma, UserRole } from '@prisma/client';
+import { GymSubscriptionPlan, MembershipStatus, PaymentStatus, Prisma, UserRole } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { PrismaService } from './prisma.service';
 import type { AuthUser } from './common';
@@ -20,11 +20,21 @@ export class MiniService {
     return user.gymId;
   }
 
+  private subscriptionEnd(start: Date, plan: GymSubscriptionPlan, trialDays = 7) {
+    const end = new Date(start);
+    if (plan === GymSubscriptionPlan.TRIAL) end.setDate(end.getDate() + trialDays);
+    else if (plan === GymSubscriptionPlan.MONTHLY) end.setMonth(end.getMonth() + 1);
+    else end.setFullYear(end.getFullYear() + 1);
+    return end;
+  }
+
   async createGym(dto: CreateGymDto) {
     const existing = await this.prisma.user.findUnique({ where: { email: dto.adminEmail.toLowerCase() } });
     if (existing) throw new ConflictException('Ese correo ya tiene una cuenta');
     return this.prisma.$transaction(async (tx) => {
-      const gym = await tx.gym.create({ data: { name: dto.name, slug: dto.slug.toLowerCase(), province: dto.province, phone: dto.phone, currency: dto.currency } });
+      const subscriptionStartedAt = new Date();
+      const subscriptionTrialDays = dto.subscriptionTrialDays ?? 7;
+      const gym = await tx.gym.create({ data: { name: dto.name, slug: dto.slug.toLowerCase(), province: dto.province, phone: dto.phone, currency: dto.currency, subscriptionPlan: dto.subscriptionPlan, subscriptionTrialDays, subscriptionStartedAt, subscriptionEndsAt: this.subscriptionEnd(subscriptionStartedAt, dto.subscriptionPlan, subscriptionTrialDays) } });
       await tx.user.create({ data: { email: dto.adminEmail.toLowerCase(), passwordHash: await argon2.hash(dto.adminPassword), name: dto.adminName, role: UserRole.ADMIN, gymId: gym.id } });
       return gym;
     });
@@ -61,6 +71,14 @@ export class MiniService {
 
   updateGymStatus(id: string, isActive: boolean) {
     return this.prisma.gym.update({ where: { id }, data: { isActive } });
+  }
+
+  async renewGymSubscription(id: string, subscriptionPlan: GymSubscriptionPlan, requestedTrialDays?: number) {
+    const gym = await this.requireGym(id);
+    const now = new Date();
+    const subscriptionStartedAt = gym.subscriptionEndsAt > now ? gym.subscriptionEndsAt : now;
+    const subscriptionTrialDays = requestedTrialDays ?? gym.subscriptionTrialDays ?? 7;
+    return this.prisma.gym.update({ where: { id }, data: { subscriptionPlan, subscriptionTrialDays, subscriptionStartedAt, subscriptionEndsAt: this.subscriptionEnd(subscriptionStartedAt, subscriptionPlan, subscriptionTrialDays) } });
   }
 
   async listGymAdmins(gymId: string) {
@@ -298,16 +316,24 @@ export class MiniService {
 
   async platformOverview() {
     const start = new Date(); start.setDate(1); start.setHours(0, 0, 0, 0);
-    const [gyms, activeGyms, members, newMembers, revenue, debtRows] = await Promise.all([
+    const nextMonth = new Date(start); nextMonth.setMonth(nextMonth.getMonth() + 1);
+    const trendMonths = Array.from({ length: 6 }, (_, index) => {
+      const monthStart = new Date(start); monthStart.setMonth(monthStart.getMonth() - (5 - index));
+      const monthEnd = new Date(monthStart); monthEnd.setMonth(monthEnd.getMonth() + 1);
+      return { monthStart, monthEnd };
+    });
+    const [gyms, activeGyms, members, newMembers, revenue, debtRows, ...memberTrendCounts] = await Promise.all([
       this.prisma.gym.count(),
       this.prisma.gym.count({ where: { isActive: true } }),
       this.prisma.member.count({ where: { status: 'ACTIVE' } }),
-      this.prisma.member.count({ where: { joinedAt: { gte: start } } }),
-      this.prisma.paymentMovement.aggregate({ where: { occurredAt: { gte: start } }, _sum: { amount: true } }),
+      this.prisma.member.count({ where: { joinedAt: { gte: start, lt: nextMonth } } }),
+      this.prisma.paymentMovement.aggregate({ where: { occurredAt: { gte: start, lt: nextMonth } }, _sum: { amount: true } }),
       this.prisma.payment.findMany({ where: { status: { in: [PaymentStatus.PENDING, PaymentStatus.PARTIAL, PaymentStatus.OVERDUE] } }, select: { amount: true, paidAmount: true } }),
+      ...trendMonths.map(({ monthStart, monthEnd }) => this.prisma.member.count({ where: { joinedAt: { gte: monthStart, lt: monthEnd } } })),
     ]);
     const debt = debtRows.reduce((sum, row) => sum + Number(row.amount) - Number(row.paidAmount), 0);
-    return { gyms, activeGyms, members, newMembers, monthlyRevenue: Number(revenue._sum.amount ?? 0), pendingDebt: Number(debt.toFixed(2)) };
+    const memberTrend = trendMonths.map(({ monthStart }, index) => ({ month: monthStart.toISOString().slice(0, 7), members: memberTrendCounts[index] }));
+    return { gyms, activeGyms, members, newMembers, monthlyRevenue: Number(revenue._sum.amount ?? 0), pendingDebt: Number(debt.toFixed(2)), memberTrend };
   }
 
   async createMember(dto: CreateMemberDto, user: AuthUser) {
@@ -499,12 +525,13 @@ export class MiniService {
   async adminDashboard(user: AuthUser) {
     const gymId = this.gymId(user);
     const start = new Date(); start.setDate(1); start.setHours(0, 0, 0, 0);
+    const nextMonth = new Date(start); nextMonth.setMonth(nextMonth.getMonth() + 1);
     const [members, activeMemberships, revenue, debtRows, recent] = await Promise.all([
       this.prisma.member.count({ where: { gymId } }),
       this.prisma.membership.count({ where: { status: MembershipStatus.ACTIVE, endDate: { gte: new Date() }, member: { gymId } } }),
-      this.prisma.paymentMovement.aggregate({ where: { payment: { gymId }, occurredAt: { gte: start } }, _sum: { amount: true } }),
+      this.prisma.paymentMovement.aggregate({ where: { payment: { gymId }, occurredAt: { gte: start, lt: nextMonth } }, _sum: { amount: true } }),
       this.prisma.payment.findMany({ where: { gymId, status: { in: [PaymentStatus.PENDING, PaymentStatus.PARTIAL, PaymentStatus.OVERDUE] } }, select: { amount: true, paidAmount: true } }),
-      this.prisma.paymentMovement.findMany({ where: { payment: { gymId } }, include: { payment: { include: { member: true } } }, orderBy: { occurredAt: 'desc' }, take: 5 }),
+      this.prisma.paymentMovement.findMany({ where: { payment: { gymId }, occurredAt: { gte: start, lt: nextMonth } }, include: { payment: { include: { member: true } } }, orderBy: { occurredAt: 'desc' }, take: 5 }),
     ]);
     return { members, activeMemberships, monthlyRevenue: Number(revenue._sum.amount ?? 0), pendingDebt: Number(debtRows.reduce((sum, row) => sum + Number(row.amount) - Number(row.paidAmount), 0).toFixed(2)), recentPayments: recent };
   }

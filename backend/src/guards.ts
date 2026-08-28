@@ -1,8 +1,9 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AuthGuard } from '@nestjs/passport';
-import type { UserRole } from '@prisma/client';
+import { UserRole } from '@prisma/client';
 import { IS_PUBLIC, ROLES, type AuthUser } from './common';
+import { PrismaService } from './prisma.service';
 
 @Injectable()
 export class JwtGuard extends AuthGuard('jwt') {
@@ -25,3 +26,15 @@ export class RolesGuard implements CanActivate {
   }
 }
 
+@Injectable()
+export class GymSubscriptionGuard implements CanActivate {
+  constructor(private readonly prisma: PrismaService) {}
+  async canActivate(context: ExecutionContext) {
+    const request = context.switchToHttp().getRequest<{ method: string; user?: AuthUser }>();
+    if (!request.user || request.user.role !== UserRole.ADMIN || ['GET','HEAD','OPTIONS'].includes(request.method)) return true;
+    if (!request.user.gymId) throw new ForbiddenException('Para continuar debes renovar la membresía de tu gimnasio.');
+    const gym = await this.prisma.gym.findUnique({ where: { id: request.user.gymId }, select: { isActive: true, subscriptionEndsAt: true } });
+    if (!gym?.isActive || gym.subscriptionEndsAt.getTime() <= Date.now()) throw new ForbiddenException('Para continuar debes renovar la membresía de tu gimnasio.');
+    return true;
+  }
+}

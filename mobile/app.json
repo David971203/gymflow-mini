@@ -12,6 +12,7 @@
     "android": {
       "package": "com.gymflow.mini.admin",
       "versionCode": 1,
+      "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#173f31"

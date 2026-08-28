@@ -8,10 +8,15 @@
     ],
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
+    "androidStatusBar": {
+      "backgroundColor": "#00000000",
+      "translucent": true
+    },
     "icon": "./assets/icon.png",
     "android": {
       "package": "com.gymflow.mini.admin",
       "versionCode": 1,
+      "edgeToEdgeEnabled": true,
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",

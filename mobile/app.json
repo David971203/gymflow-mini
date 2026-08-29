@@ -18,6 +18,9 @@
       "versionCode": 1,
       "edgeToEdgeEnabled": true,
       "softwareKeyboardLayoutMode": "resize",
+      "permissions": [
+        "android.permission.SCHEDULE_EXACT_ALARM"
+      ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#173f31"
@@ -26,7 +29,14 @@
     "plugins": [
       "expo-secure-store",
       "expo-sqlite",
-      "expo-font"
+      "expo-font",
+      [
+        "expo-notifications",
+        {
+          "color": "#173F31",
+          "defaultChannel": "membership-expirations"
+        }
+      ]
     ],
     "extra": {
       "eas": {

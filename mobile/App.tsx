@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, AppState, BackHandler, Easing, FlatList, Image, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, useColorScheme, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, AppState, BackHandler, Easing, FlatList, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, useColorScheme, View } from 'react-native';
 import * as Network from 'expo-network';
+import type { NotificationResponse } from 'expo-notifications';
 import * as SecureStore from 'expo-secure-store';
 import { Directory } from 'expo-file-system';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
@@ -8,11 +9,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import writeExcelFile, { type SheetData } from 'write-excel-file/universal';
 import { api } from './src/api';
+import { cancelMembershipNotifications, MEMBERSHIP_NOTIFICATION_SOURCE, supportsMembershipNotifications, syncMembershipNotifications } from './src/notifications';
 import { discardSyncIssue, getSyncIssues, getSyncState, initializeOffline, offline, subscribeOffline, syncNow } from './src/offline';
+import { getTrustedClockStatus, persistTrustedClock, SUBSCRIPTION_VALIDATION_MESSAGE } from './src/trustedClock';
 import type { Currency, Dashboard, GymSubscriptionPlan, Member, Membership, MemberSex, Payment, Plan, SyncIssue, SyncState, Tab, User } from './src/types';
 
 let activeCurrency: Currency = 'CUP';
 let activeSubscriptionEndsAt = '';
+let activeSubscriptionScope = '';
 let activeSubscriptionTrialDays = 7;
 const renewalMessage = 'Para continuar debes renovar la membresía de tu gimnasio.';
 const renewalWhatsApp = (process.env.EXPO_PUBLIC_RENEWAL_WHATSAPP ?? '').replace(/\D/g,'');
@@ -29,9 +33,17 @@ const monthNames = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Ag
 type PaymentMonthFilter = 'ALL' | number;
 type PaymentYearFilter = 'ALL' | number;
 
-function subscriptionIsActive() { return !!activeSubscriptionEndsAt && new Date(activeSubscriptionEndsAt).getTime() > Date.now(); }
-function ensureActiveSubscription() { if (!subscriptionIsActive()) throw new Error(renewalMessage); }
-function withActiveSubscription(action: () => void) { if (!subscriptionIsActive()) { showError(new Error(renewalMessage)); return; } action(); }
+type SubscriptionAccess = 'ACTIVE' | 'EXPIRED' | 'VALIDATION_REQUIRED';
+function subscriptionAccess(): { status: SubscriptionAccess; now: number } {
+  const clock = getTrustedClockStatus(activeSubscriptionScope);
+  if (!clock.allowedOffline) return { status:'VALIDATION_REQUIRED', now:clock.now };
+  const endsAt = new Date(activeSubscriptionEndsAt).getTime();
+  return { status:!!activeSubscriptionEndsAt && Number.isFinite(endsAt) && endsAt > clock.now ? 'ACTIVE' : 'EXPIRED', now:clock.now };
+}
+function subscriptionIsActive() { return subscriptionAccess().status === 'ACTIVE'; }
+function subscriptionErrorMessage() { return subscriptionAccess().status === 'VALIDATION_REQUIRED' ? SUBSCRIPTION_VALIDATION_MESSAGE : renewalMessage; }
+function ensureActiveSubscription() { if (!subscriptionIsActive()) throw new Error(subscriptionErrorMessage()); }
+function withActiveSubscription(action: () => void) { if (!subscriptionIsActive()) { showError(new Error(subscriptionErrorMessage())); return; } action(); }
 function gymSubscriptionLabel(plan: GymSubscriptionPlan | null, trialDays = activeSubscriptionTrialDays) { return !plan?'Sin membresía':plan==='TRIAL'?`Prueba gratuita · ${trialDays} días`:({MONTHLY:'Mensual',ANNUAL:'Anual'} as Record<Exclude<GymSubscriptionPlan,'TRIAL'>,string>)[plan]; }
 
 function paymentCreatedDate(payment: Payment) {
@@ -228,6 +240,16 @@ function useRevealFocusedInput(scrollRef: React.RefObject<ScrollView | null>, ad
   return revealTarget;
 }
 
+function useKeyboardOpen() {
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  useEffect(() => {
+    const showSubscription = Keyboard.addListener('keyboardDidShow', () => setKeyboardOpen(true));
+    const hideSubscription = Keyboard.addListener('keyboardDidHide', () => setKeyboardOpen(false));
+    return () => { showSubscription.remove(); hideSubscription.remove(); };
+  }, []);
+  return keyboardOpen;
+}
+
 export default function App() {
   const systemScheme = useColorScheme();
   const [themePreference, setThemePreference] = useState<ThemePreference>('light');
@@ -247,17 +269,32 @@ export default function App() {
       ? <View style={styles.center}><ActivityIndicator color="#c9f47b" size="large" /></View>
       : !user
         ? <Login onLogin={setUser} />
-        : <AdminApp user={user} dark={dark} themePreference={themePreference} onThemeChange={changeTheme} onLogout={async () => { await api.logout(); setUser(null); }} />}
+        : <AdminApp user={user} dark={dark} themePreference={themePreference} onThemeChange={changeTheme} onLogout={async () => { await cancelMembershipNotifications(user.gymId).catch(() => undefined); await api.logout(); setUser(null); }} />}
     <ToastHost />
   </SafeAreaProvider>;
 }
 
 function Login({ onLogin }: { onLogin: (user: User) => void }) {
-  const [email, setEmail] = useState('admin@habanafitness.cu');
-  const [password, setPassword] = useState('AdminMini123!');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
+  const loginCardY = useRef(0);
   const revealFocusedInput = useRevealFocusedInput(scrollRef, 24);
+  const scrollLoginFormAboveKeyboard = useCallback(() => {
+    scrollRef.current?.scrollTo({ y: Math.max(0, loginCardY.current - 12), animated: true });
+  }, []);
+  const revealLoginInput = useCallback((target: number) => {
+    revealFocusedInput(target);
+    if (Keyboard.isVisible()) setTimeout(scrollLoginFormAboveKeyboard, 100);
+  }, [revealFocusedInput, scrollLoginFormAboveKeyboard]);
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const showSubscription = Keyboard.addListener(showEvent, () => setTimeout(scrollLoginFormAboveKeyboard, 80));
+    const hideSubscription = Keyboard.addListener('keyboardDidHide', () => scrollRef.current?.scrollTo({ y: 0, animated: true }));
+    return () => { showSubscription.remove(); hideSubscription.remove(); };
+  }, [scrollLoginFormAboveKeyboard]);
   const submit = async () => {
     setLoading(true);
     try { onLogin(await api.login(email.trim(), password)); }
@@ -268,17 +305,16 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
     <ExpoStatusBar style="light" translucent backgroundColor="transparent" />
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.loginKeyboardAvoiding}>
       <ScrollView ref={scrollRef} contentContainerStyle={styles.loginScroll} keyboardShouldPersistTaps="handled" keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'} showsVerticalScrollIndicator={false}>
-        <KeyboardScrollContext.Provider value={revealFocusedInput}>
-        <Image accessibilityLabel="Logo de GymFlow Mini" source={require('./assets/icon.png')} style={styles.logo} />
+        <KeyboardScrollContext.Provider value={revealLoginInput}>
         <Text style={styles.loginBrand}>GymFlow <Text style={styles.mini}>MINI</Text></Text>
         <Text style={styles.loginTitle}>Tu gimnasio, bajo control.</Text>
         <Text style={styles.loginCopy}>Miembros, planes y caja en una aplicación simple.</Text>
-        <View style={styles.loginCard}>
+        <View style={styles.loginCard} onLayout={(event) => { loginCardY.current = event.nativeEvent.layout.y; }}>
           <Field label="Correo" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" returnKeyType="next" />
-          <Field label="Contraseña" value={password} onChangeText={setPassword} secureTextEntry returnKeyType="done" onSubmitEditing={() => void submit()} />
-          <PrimaryButton label={loading ? 'Entrando…' : 'Entrar'} onPress={submit} disabled={loading} />
+          <PasswordField value={password} onChangeText={setPassword} visible={passwordVisible} onToggleVisibility={() => setPasswordVisible(value => !value)} onSubmit={() => void submit()} />
+          <PrimaryButton label={loading ? 'Entrando…' : 'Entrar'} onPress={submit} disabled={loading || !email.trim() || !password} />
         </View>
-        <Text style={styles.version}>PILOTO CUBA · V0.1</Text>
+        <Text style={styles.version}>V0.1</Text>
         </KeyboardScrollContext.Provider>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -288,12 +324,14 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
 function AdminApp({ user, dark, themePreference, onThemeChange, onLogout }: { user: User; dark: boolean; themePreference: ThemePreference; onThemeChange: (theme: ThemePreference) => void; onLogout: () => void }) {
   const [currentUser, setCurrentUser] = useState(user);
   const [tab, setTab] = useState<Tab>('INICIO');
+  const keyboardOpen = useKeyboardOpen();
   const [memberEntryFilter, setMemberEntryFilter] = useState<MemberFilter>('ALL');
   const [ready, setReady] = useState(false); const [revision, setRevision] = useState(0); const [issuesOpen, setIssuesOpen] = useState(false);
   const [syncState, setSyncState] = useState<SyncState>({ phase: 'STARTING', pending: 0, rejected: 0 });
   const lastSyncErrorToast = useRef('');
   const profileRefreshInFlight = useRef(false);
   const scope = currentUser.gymId;
+  activeSubscriptionScope = scope;
   activeCurrency = currentUser.gym.currency;
   activeSubscriptionEndsAt = currentUser.gym.subscriptionEndsAt ?? '';
   activeSubscriptionTrialDays = currentUser.gym.subscriptionTrialDays ?? 7;
@@ -313,12 +351,44 @@ function AdminApp({ user, dark, themePreference, onThemeChange, onLogout }: { us
   useEffect(() => {
     let mounted = true;
     const unsubscribe = subscribeOffline(() => { if (mounted) { setRevision((value) => value + 1); setSyncState(getSyncState(scope)); } });
-    void initializeOffline(scope).then(() => { if (mounted) { setReady(true); setSyncState(getSyncState(scope)); } return syncNow(scope); });
+    void initializeOffline(scope).then(() => syncNow(scope)).catch(showError).finally(() => { if (mounted) { setReady(true); setSyncState(getSyncState(scope)); } });
     const networkSubscription = Network.addNetworkStateListener((state) => { if (state.isConnected !== false) { void refreshProfile(); void syncNow(scope); } });
-    const appSubscription = AppState.addEventListener('change', (state) => { if (state === 'active') { void refreshProfile(); void syncNow(scope); } });
+    const appSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') { void refreshProfile(); void syncNow(scope); }
+      else void persistTrustedClock(scope).catch(() => undefined);
+    });
     const profileInterval = setInterval(() => { if (AppState.currentState === 'active') void refreshProfile(); }, PROFILE_REFRESH_INTERVAL_MS);
-    return () => { mounted = false; unsubscribe(); networkSubscription.remove(); appSubscription.remove(); clearInterval(profileInterval); };
+    const clockInterval = setInterval(() => {
+      if (AppState.currentState === 'active') void persistTrustedClock(scope).then(() => { if (mounted) setRevision(value => value + 1); }).catch(() => undefined);
+    }, 60_000);
+    return () => { mounted = false; void persistTrustedClock(scope).catch(() => undefined); unsubscribe(); networkSubscription.remove(); appSubscription.remove(); clearInterval(profileInterval); clearInterval(clockInterval); };
   }, [scope,refreshProfile]);
+  useEffect(() => {
+    if (!ready) return;
+    void offline.members(scope).then(members => syncMembershipNotifications(scope, members)).catch(showError);
+  }, [ready, revision, scope]);
+  useEffect(() => {
+    if (!supportsMembershipNotifications()) return;
+    let mounted = true;
+    let removeListener: (() => void) | undefined;
+    const openMembershipNotification = (response: NotificationResponse) => {
+      const data = response.notification.request.content.data;
+      if (data?.source !== MEMBERSHIP_NOTIFICATION_SOURCE || data.scope !== scope) return;
+      setMemberEntryFilter(data.stage === 'expired' ? 'EXPIRED' : 'UPCOMING');
+      setTab('MIEMBROS');
+    };
+    void import('expo-notifications').then(Notifications => {
+      if (!mounted) return;
+      const subscription = Notifications.addNotificationResponseReceivedListener(openMembershipNotification);
+      removeListener = () => subscription.remove();
+      return Notifications.getLastNotificationResponseAsync().then(response => {
+        if (!response) return;
+        openMembershipNotification(response);
+        return Notifications.clearLastNotificationResponseAsync();
+      });
+    }).catch(showError);
+    return () => { mounted = false; removeListener?.(); };
+  }, [scope]);
   useEffect(() => {
     const signature = `${syncState.phase}:${syncState.message ?? ''}:${syncState.rejected}`;
     if (syncState.phase !== 'ERROR' && syncState.rejected === 0) { lastSyncErrorToast.current = ''; return; }
@@ -344,7 +414,7 @@ function AdminApp({ user, dark, themePreference, onThemeChange, onLogout }: { us
     <View style={styles.topbar}>
       <View style={styles.topbarTitle}><Text numberOfLines={1} ellipsizeMode="tail" maxFontSizeMultiplier={1.3} style={styles.kicker}>{currentUser.gym.name.toUpperCase()}</Text><Text maxFontSizeMultiplier={1.3} style={styles.screenTitle}>{tabs.find((item) => item.id === tab)?.label}</Text></View>
     </View>
-    <SyncBar state={syncState} onPress={() => { void refreshProfile(); syncState.rejected > 0 ? setIssuesOpen(true) : void syncNow(scope); }} />
+    {(!keyboardOpen || (tab !== 'MIEMBROS' && tab !== 'PLANES')) && <SyncBar state={syncState} onPress={() => { void refreshProfile(); syncState.rejected > 0 ? setIssuesOpen(true) : void syncNow(scope); }} />}
     <View style={styles.content}>
       {tab === 'INICIO' && <DashboardScreen scope={scope} revision={revision} onOpenUpcoming={() => { setMemberEntryFilter('UPCOMING'); setTab('MIEMBROS'); }} />}
       {tab === 'MIEMBROS' && <MembersScreen scope={scope} revision={revision} initialFilter={memberEntryFilter} />}
@@ -383,8 +453,10 @@ function DashboardScreen({ scope, revision, onOpenUpcoming }: ScreenProps & { on
 function AccountScreen({ user, themePreference, onThemeChange, onLogout }: { user: User; themePreference: ThemePreference; onThemeChange: (theme: ThemePreference) => void; onLogout: () => void }) {
   const confirmLogout = () => Alert.alert('Cerrar sesión', '¿Deseas salir de GymFlow Mini en este dispositivo?', [{ text:'Cancelar', style:'cancel' }, { text:'Cerrar sesión', style:'destructive', onPress:onLogout }]);
   const plan = user.gym.subscriptionPlan;
-  const expired = !subscriptionIsActive();
-  const remaining = Math.max(0,Math.ceil((new Date(user.gym.subscriptionEndsAt ?? 0).getTime()-Date.now())/86_400_000));
+  const access = subscriptionAccess();
+  const verificationRequired = access.status === 'VALIDATION_REQUIRED';
+  const expired = access.status === 'EXPIRED';
+  const remaining = Math.max(0,Math.ceil((new Date(user.gym.subscriptionEndsAt ?? 0).getTime()-access.now)/86_400_000));
   const openWhatsApp = (message:string) => { const url=`https://wa.me/${renewalWhatsApp}?text=${encodeURIComponent(message)}`; void Linking.openURL(url).catch(() => showError(new Error(renewalWhatsApp ? 'Comprueba que WhatsApp esté instalado.' : 'Configura el número de renovación de GymFlow Mini.'))); };
   const expiry = formatDate(user.gym.subscriptionEndsAt);
   const actions: Array<{label:string;message:string}> = !plan
@@ -405,14 +477,14 @@ function AccountScreen({ user, themePreference, onThemeChange, onLogout }: { use
               { label:'Renovar plan anual', message:`Hola, quiero renovar el plan anual del gimnasio ${user.gym.name}, que vence el ${expiry}.` },
               { label:'Cambiar a plan mensual', message:`Hola, quiero cambiar el gimnasio ${user.gym.name} del plan anual al plan mensual cuando termine el período actual el ${expiry}.` },
             ];
-  const status = !plan ? 'Sin plan' : expired ? 'Vencida' : 'Activa';
-  const actionCopy = !plan ? 'Activa una membresía para habilitar nuevamente todas las operaciones.' : expired ? renewalMessage : plan==='TRIAL' ? 'Tu prueba está activa. Puedes adquirir un plan sin perder los días restantes.' : 'Puedes renovar el plan actual o solicitar un cambio para el próximo período.';
+  const status = verificationRequired ? 'Verificar' : !plan ? 'Sin plan' : expired ? 'Vencida' : 'Activa';
+  const actionCopy = verificationRequired ? SUBSCRIPTION_VALIDATION_MESSAGE : !plan ? 'Activa una membresía para habilitar nuevamente todas las operaciones.' : expired ? renewalMessage : plan==='TRIAL' ? 'Tu prueba está activa. Puedes adquirir un plan sin perder los días restantes.' : 'Puedes renovar el plan actual o solicitar un cambio para el próximo período.';
   return <ScrollView contentContainerStyle={styles.accountScroll}>
     <View style={styles.accountHero}><Text style={styles.accountHeroLabel}>GIMNASIO</Text><Text numberOfLines={2} ellipsizeMode="tail" adjustsFontSizeToFit maxFontSizeMultiplier={1.35} style={styles.accountHeroGym}>{user.gym.name}</Text></View>
-    <View style={[styles.subscriptionCard,expired&&styles.subscriptionCardExpired]}>
-      <View style={styles.subscriptionHead}><View style={[styles.subscriptionIcon,expired&&styles.subscriptionIconExpired]}><Ionicons name={expired?'alert-circle-outline':'shield-checkmark-outline'} size={23} color={expired?palette.danger:palette.action}/></View><View style={styles.rowMain}><Text style={styles.subscriptionEyebrow}>MEMBRESÍA DE GYMFLOW MINI</Text><Text style={[styles.subscriptionName,expired&&styles.subscriptionNameExpired]}>{gymSubscriptionLabel(plan)}</Text></View><View style={[styles.subscriptionBadge,expired&&styles.subscriptionBadgeExpired]}><Text style={[styles.subscriptionBadgeText,expired&&styles.subscriptionBadgeTextExpired]}>{status}</Text></View></View>
-      <View style={styles.subscriptionDates}><View><Text style={styles.subscriptionDateLabel}>FECHA DE VENCIMIENTO</Text><Text style={styles.subscriptionDateValue}>{expiry}</Text></View>{!expired?<Text style={styles.subscriptionRemaining}>{remaining} día{remaining===1?'':'s'} restante{remaining===1?'':'s'}</Text>:null}</View>
-      <Text style={[styles.subscriptionActionCopy,expired&&styles.subscriptionExpiredCopy]}>{actionCopy}</Text>
+    <View style={[styles.subscriptionCard,(expired||verificationRequired)&&styles.subscriptionCardExpired]}>
+      <View style={styles.subscriptionHead}><View style={[styles.subscriptionIcon,(expired||verificationRequired)&&styles.subscriptionIconExpired]}><Ionicons name={(expired||verificationRequired)?'alert-circle-outline':'shield-checkmark-outline'} size={23} color={(expired||verificationRequired)?palette.danger:palette.action}/></View><View style={styles.rowMain}><Text style={styles.subscriptionEyebrow}>MEMBRESÍA DE GYMFLOW MINI</Text><Text style={[styles.subscriptionName,(expired||verificationRequired)&&styles.subscriptionNameExpired]}>{gymSubscriptionLabel(plan)}</Text></View><View style={[styles.subscriptionBadge,(expired||verificationRequired)&&styles.subscriptionBadgeExpired]}><Text style={[styles.subscriptionBadgeText,(expired||verificationRequired)&&styles.subscriptionBadgeTextExpired]}>{status}</Text></View></View>
+      <View style={styles.subscriptionDates}><View><Text style={styles.subscriptionDateLabel}>FECHA DE VENCIMIENTO</Text><Text style={styles.subscriptionDateValue}>{expiry}</Text></View>{!expired&&!verificationRequired?<Text style={styles.subscriptionRemaining}>{remaining} día{remaining===1?'':'s'} restante{remaining===1?'':'s'}</Text>:null}</View>
+      <Text style={[styles.subscriptionActionCopy,(expired||verificationRequired)&&styles.subscriptionExpiredCopy]}>{actionCopy}</Text>
       <View style={styles.subscriptionActionGroup}>{actions.map((action,index)=><Pressable key={action.label} accessibilityRole="link" accessibilityLabel={`${action.label} por WhatsApp`} onPress={()=>openWhatsApp(action.message)} style={({pressed}) => [styles.whatsappButton,styles.whatsappButtonInGroup,index>0&&styles.whatsappButtonSecondary,pressed&&styles.tabPressed]}><Ionicons name="logo-whatsapp" size={19} color={index>0?palette.action:palette.white}/><Text style={[styles.whatsappButtonText,index>0&&styles.whatsappButtonTextSecondary]}>{action.label}</Text></Pressable>)}</View>
     </View>
     <View style={styles.accountCard}><AccountRow label="Administrador" value={user.name}/><AccountRow label="Correo" value={user.email}/><AccountRow label="Gimnasio" value={user.gym.name}/><AccountRow label="Moneda" value={user.gym.currency} last/></View>
@@ -503,7 +575,7 @@ function PlansScreen({ scope, revision }: ScreenProps) {
   const [plans, setPlans] = useState<Plan[]>([]); const [loading, setLoading] = useState(true); const [open, setOpen] = useState(false); const [selected, setSelected] = useState<Plan | null>(null); const [editing, setEditing] = useState<Plan | null>(null); const [planFilter, setPlanFilter] = useState<PlanFilter>('ALL');
   const load = useCallback(() => { setLoading(true); offline.plans(scope).then(setPlans).catch(showError).finally(() => setLoading(false)); }, [scope]);
   const refresh = useCallback(() => { void syncNow(scope).then(load); }, [scope, load]);
-  const onlineAction = async (action: () => void) => { if (!subscriptionIsActive()) { showError(new Error(renewalMessage)); return; } if (!await hasInternetConnection()) { showOnlineRequired(); return; } action(); };
+  const onlineAction = async (action: () => void) => { if (!subscriptionIsActive()) { showError(new Error(subscriptionErrorMessage())); return; } if (!await hasInternetConnection()) { showOnlineRequired(); return; } action(); };
   const confirmDelete = (plan: Plan) => { void onlineAction(() => Alert.alert('Eliminar plan inactivo', `¿Deseas eliminar el plan ${plan.name}? Solo se borrará definitivamente si no tiene historial. Si fue utilizado, permanecerá archivado para conservar la trazabilidad.`, [{ text:'Cancelar', style:'cancel' }, { text:'Eliminar', style:'destructive', onPress:() => { void api.deletePlan(plan.id).then(async result => { await syncNow(scope); setSelected(null); showSuccess(result.disposition === 'DELETED' ? 'Plan eliminado definitivamente.' : 'Plan conservado como historial e inactivo.'); load(); }).catch(showError); } }])); };
   const reactivate = (plan: Plan) => { void onlineAction(() => Alert.alert('Reactivar plan', `¿Deseas volver a activar el plan ${plan.name}? Estará disponible para nuevas membresías.`, [{ text:'Cancelar', style:'cancel' }, { text:'Reactivar', onPress:() => { void api.updatePlan(plan.id, { isActive:true }).then(() => syncNow(scope)).then(() => { setSelected(null); showSuccess('Plan reactivado correctamente.'); load(); }).catch(showError); } }])); };
   const filterOptions: Array<{ id: PlanFilter; label: string; count: number }> = [{ id:'ALL', label:'Todos', count:plans.length }, { id:'ACTIVE', label:'Activos', count:plans.filter(plan => plan.isActive).length }, { id:'INACTIVE', label:'Inactivos', count:plans.filter(plan => !plan.isActive).length }];
@@ -568,6 +640,9 @@ function PaymentsScreen({ scope, revision }: ScreenProps) {
 function MemberForm({ scope, open, member, plans, onClose, onSaved }: FormProps & { member: Member | null; plans: Plan[] }) {
   const [ci, setCi] = useState(''); const [code, setCode] = useState(''); const [firstName, setFirstName] = useState(''); const [lastName, setLastName] = useState(''); const [age, setAge] = useState(''); const [sex, setSex] = useState<MemberSex | ''>(''); const [phone, setPhone] = useState(''); const [address, setAddress] = useState(''); const [status, setStatus] = useState('ACTIVE'); const [saving, setSaving] = useState(false);
   const [page, setPage] = useState(0); const [planId, setPlanId] = useState(''); const [periodCount, setPeriodCount] = useState(1); const [initialPayment, setInitialPayment] = useState('');
+  const keyboardOpen = useKeyboardOpen();
+  const scrollRef = useRef<ScrollView>(null);
+  const revealFocusedInput = useRevealFocusedInput(scrollRef, 120);
   const availablePlans = plans.filter(plan => plan.isActive);
   const selectedInitialPlan = availablePlans.find(plan => plan.id === planId);
   const initialEndDate = selectedInitialPlan ? addDays(new Date().toISOString(), selectedInitialPlan.durationDays * periodCount) : undefined;
@@ -586,12 +661,14 @@ function MemberForm({ scope, open, member, plans, onClose, onSaved }: FormProps 
   }, [page, onClose]);
   return <View style={styles.memberFormPage}>
     <View style={styles.memberFormHeader}><View style={styles.memberFormHeaderRow}><Pressable accessibilityRole="button" accessibilityLabel={page > 0 ? 'Paso anterior' : 'Volver a miembros'} onPress={goBack} style={({pressed}) => [styles.memberFormBack, pressed && styles.tabPressed]}><Ionicons name="arrow-back" size={19} color={activeDarkTheme ? darkPalette.text : palette.ink}/><Text style={styles.memberFormBackText}>{page > 0 ? 'Atrás' : 'Volver'}</Text></Pressable><Text style={styles.memberFormStep}>PASO {page + 1} DE {totalPages}</Text><Pressable accessibilityRole="button" disabled={!pageValid || saving} onPress={goForward} style={[styles.memberFormNext, (!pageValid || saving) && styles.disabled]}><Text style={styles.memberFormNextText}>{page === totalPages - 1 ? saving ? 'Guardando…' : 'Guardar' : 'Siguiente'}</Text><Ionicons name={page === totalPages - 1 ? 'checkmark' : 'arrow-forward'} size={16} color={palette.white}/></Pressable></View><View style={styles.memberFormProgress}>{Array.from({length:totalPages},(_,step) => <View key={step} style={[styles.memberFormProgressPart, step <= page && styles.memberFormProgressPartActive]}/>)}</View><Text style={styles.memberFormTitle}>{pageTitles[page]}</Text><Text style={styles.memberFormCopy}>{member ? 'Editando los datos del miembro.' : page === 4 ? 'Selecciona obligatoriamente la membresía inicial.' : 'Registrando un nuevo miembro.'}</Text></View>
-    <ScrollView key={page} style={styles.memberFormScroll} contentContainerStyle={styles.memberFormContent} keyboardShouldPersistTaps="handled" keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'} showsVerticalScrollIndicator={false}>
+    <ScrollView ref={scrollRef} key={page} style={styles.memberFormScroll} contentContainerStyle={[styles.memberFormContent, keyboardOpen && styles.memberFormContentKeyboard]} keyboardShouldPersistTaps="handled" keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'} showsVerticalScrollIndicator={keyboardOpen}>
+      <KeyboardScrollContext.Provider value={revealFocusedInput}>
       {page === 0 ? <><Field label="Nombre" value={firstName} onChangeText={setFirstName} /><Field label="Apellidos" value={lastName} onChangeText={setLastName} /></> : null}
       {page === 1 ? <><Field label="Carnet de identidad (11 dígitos)" value={ci} onChangeText={(value) => setCi(value.replace(/\D/g, '').slice(0, 11))} keyboardType="number-pad" maxLength={11} /><Field label="Código interno (opcional)" value={code} onChangeText={(value) => setCode(value.slice(0, 40))} maxLength={40} /></> : null}
       {page === 2 ? <><Field label="Edad (opcional)" value={age} onChangeText={(value) => setAge(value.replace(/\D/g, '').slice(0, 3))} keyboardType="number-pad" maxLength={3} /><Text style={styles.fieldLabel}>Sexo (opcional)</Text><View style={styles.statusChoices}>{([['MALE','Masculino'],['FEMALE','Femenino'],['OTHER','Otro']] as Array<[MemberSex,string]>).map(([value,label]) => <Pressable key={value} onPress={() => setSex(sex === value ? '' : value)} style={[styles.statusChoice, sex === value && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, sex === value && styles.statusChoiceTextActive]}>{label}</Text></Pressable>)}</View></> : null}
       {page === 3 ? <><Field label="Teléfono" value={phone} onChangeText={setPhone} keyboardType="phone-pad" /><Field label="Dirección" value={address} onChangeText={setAddress} />{member && <><Text style={styles.fieldLabel}>Estado</Text><View style={styles.statusChoices}><Pressable onPress={() => setStatus('ACTIVE')} style={[styles.statusChoice, status === 'ACTIVE' && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, status === 'ACTIVE' && styles.statusChoiceTextActive]}>Activo</Text></Pressable><Pressable onPress={() => setStatus('INACTIVE')} style={[styles.statusChoice, status === 'INACTIVE' && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, status === 'INACTIVE' && styles.statusChoiceTextActive]}>Inactivo</Text></Pressable></View></>}</> : null}
       {page === 4 && !member ? <>{availablePlans.length ? <><View style={styles.choices}>{availablePlans.map(plan => <Pressable accessibilityRole="radio" accessibilityState={{checked:planId===plan.id}} key={plan.id} onPress={() => setPlanId(plan.id)} style={[styles.choice,planId===plan.id&&styles.choiceActive]}><Text numberOfLines={2} ellipsizeMode="tail" maxFontSizeMultiplier={1.3} style={styles.choiceTitle}>{plan.name}</Text><Text style={styles.choicePrice}>{money(plan.price)} · {plan.durationDays} días</Text></Pressable>)}</View><PeriodSelector value={periodCount} onChange={setPeriodCount}/>{selectedInitialPlan?<MembershipPurchasePreview plan={selectedInitialPlan} periodCount={periodCount} endDate={initialEndDate}/>:null}<Field label="Pago inicial en efectivo (opcional)" value={initialPayment} onChangeText={setInitialPayment} keyboardType="numeric" /></> : <View style={styles.planRequiredEmpty}><Ionicons name="alert-circle-outline" size={26} color={palette.warning}/><Text style={styles.planRequiredTitle}>No hay planes activos</Text><Text style={styles.planRequiredCopy}>Vuelve a Planes, crea o activa un plan y después registra el miembro.</Text></View>}</> : null}
+      </KeyboardScrollContext.Provider>
     </ScrollView>
   </View>;
 }
@@ -609,6 +686,9 @@ function PlanActions({ plan, onClose, onEdit, onReactivate, onDelete }: { plan: 
 function PlanForm({ scope, open, plan, onClose, onSaved }: FormProps & { plan: Plan | null }) {
   const [name, setName] = useState(''); const [price, setPrice] = useState(''); const [days, setDays] = useState('30'); const [description, setDescription] = useState(''); const [isActive, setIsActive] = useState(true); const [saving, setSaving] = useState(false);
   const [page, setPage] = useState(0);
+  const keyboardOpen = useKeyboardOpen();
+  const scrollRef = useRef<ScrollView>(null);
+  const revealFocusedInput = useRevealFocusedInput(scrollRef, 120);
   useEffect(() => { if (!open) return; setPage(0); setName(plan?.name ?? ''); setPrice(plan?.price ? String(plan.price) : ''); setDays(plan ? String(plan.durationDays) : '30'); setDescription(plan?.description ?? ''); setIsActive(plan?.isActive ?? true); }, [open, plan]);
   const save = async () => { setSaving(true); try { ensureActiveSubscription(); if (!await hasInternetConnection()) { showOnlineRequired(); return; } const input={ name:name.trim(), price:Number(price), durationDays:Number(days), description:description.trim(), isActive }; if (plan) await api.updatePlan(plan.id, input); else await api.createPlan(input); await syncNow(scope); Keyboard.dismiss(); showSuccess(plan ? 'Plan actualizado correctamente.' : 'Plan creado correctamente.'); onSaved(); } catch(error) { showError(error); } finally { setSaving(false); } };
   const pageValid = page === 0 ? !!name.trim() : !!price && Number(price) > 0 && !!days && Number(days) > 0;
@@ -621,9 +701,11 @@ function PlanForm({ scope, open, plan, onClose, onSaved }: FormProps & { plan: P
   }, [page, onClose]);
   return <View style={styles.memberFormPage}>
     <View style={styles.memberFormHeader}><View style={styles.memberFormHeaderRow}><Pressable accessibilityRole="button" accessibilityLabel={page > 0 ? 'Paso anterior' : 'Volver a planes'} onPress={goBack} style={({pressed}) => [styles.memberFormBack, pressed && styles.tabPressed]}><Ionicons name="arrow-back" size={19} color={activeDarkTheme ? darkPalette.text : palette.ink}/><Text style={styles.memberFormBackText}>{page > 0 ? 'Atrás' : 'Volver'}</Text></Pressable><Text style={styles.memberFormStep}>PASO {page + 1} DE 2</Text><Pressable accessibilityRole="button" disabled={!pageValid || saving} onPress={goForward} style={[styles.memberFormNext, (!pageValid || saving) && styles.disabled]}><Text style={styles.memberFormNextText}>{page === 1 ? saving ? 'Guardando…' : 'Guardar' : 'Siguiente'}</Text><Ionicons name={page === 1 ? 'checkmark' : 'arrow-forward'} size={16} color={palette.white}/></Pressable></View><View style={styles.memberFormProgress}>{[0,1].map((step) => <View key={step} style={[styles.memberFormProgressPart, step <= page && styles.memberFormProgressPartActive]}/>)}</View><Text style={styles.memberFormTitle}>{page === 0 ? 'Información del plan' : 'Precio y duración'}</Text><Text style={styles.memberFormCopy}>{plan ? 'Editando los datos del plan.' : 'Creando un nuevo plan.'}</Text></View>
-    <ScrollView key={page} style={styles.memberFormScroll} contentContainerStyle={styles.memberFormContent} keyboardShouldPersistTaps="handled" keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'} showsVerticalScrollIndicator={false}>
+    <ScrollView ref={scrollRef} key={page} style={styles.memberFormScroll} contentContainerStyle={[styles.memberFormContent, keyboardOpen && styles.memberFormContentKeyboard]} keyboardShouldPersistTaps="handled" keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'} showsVerticalScrollIndicator={keyboardOpen}>
+      <KeyboardScrollContext.Provider value={revealFocusedInput}>
       {page === 0 ? <><Field label="Nombre del plan" value={name} onChangeText={setName} /><Field label="Descripción (opcional)" value={description} onChangeText={(value) => setDescription(value.slice(0, 300))} maxLength={300} /></> : null}
       {page === 1 ? <><Field label={`Precio en ${activeCurrency}`} value={price} onChangeText={setPrice} keyboardType="numeric" /><Field label="Duración en días" value={days} onChangeText={setDays} keyboardType="number-pad" />{plan ? <><Text style={styles.fieldLabel}>Disponibilidad</Text><View style={styles.statusChoices}><Pressable onPress={() => setIsActive(true)} style={[styles.statusChoice, isActive && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, isActive && styles.statusChoiceTextActive]}>Activo</Text></Pressable><Pressable onPress={() => setIsActive(false)} style={[styles.statusChoice, !isActive && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, !isActive && styles.statusChoiceTextActive]}>Inactivo</Text></Pressable></View></> : null}</> : null}
+      </KeyboardScrollContext.Provider>
     </ScrollView>
   </View>;
 }
@@ -764,6 +846,7 @@ const keyboardFixStyles = StyleSheet.create({
   sheetContent: { paddingBottom: 8 },
 });
 function Field(props: React.ComponentProps<typeof TextInput> & { label: string }) { const revealFocusedInput = useContext(KeyboardScrollContext); const { label, onFocus, ...input } = props; return <View style={styles.field}><Text maxFontSizeMultiplier={1.35} style={styles.fieldLabel}>{label}</Text><TextInput placeholderTextColor={activeDarkTheme ? '#aab7b0' : '#657169'} maxFontSizeMultiplier={1.35} style={styles.input} {...input} onFocus={(event) => { onFocus?.(event); revealFocusedInput?.(event.nativeEvent.target); }} /></View>; }
+function PasswordField({ value, visible, onChangeText, onToggleVisibility, onSubmit }: { value: string; visible: boolean; onChangeText: (value: string) => void; onToggleVisibility: () => void; onSubmit: () => void }) { const revealFocusedInput = useContext(KeyboardScrollContext); return <View style={styles.field}><Text maxFontSizeMultiplier={1.35} style={styles.fieldLabel}>Contraseña</Text><View style={styles.passwordInputShell}><TextInput accessibilityLabel="Contraseña" value={value} onChangeText={onChangeText} secureTextEntry={!visible} autoCapitalize="none" autoCorrect={false} returnKeyType="done" onSubmitEditing={onSubmit} placeholderTextColor={activeDarkTheme ? '#aab7b0' : '#657169'} maxFontSizeMultiplier={1.35} style={styles.passwordInput} onFocus={(event) => revealFocusedInput?.(event.nativeEvent.target)}/><Pressable accessibilityRole="button" accessibilityLabel={visible ? 'Ocultar contraseña' : 'Mostrar contraseña'} accessibilityState={{expanded:visible}} onPress={onToggleVisibility} style={({pressed}) => [styles.passwordVisibilityButton, pressed && styles.tabPressed]}><Ionicons name={visible ? 'eye-off-outline' : 'eye-outline'} size={21} color={activeDarkTheme ? darkPalette.secondary : palette.secondary}/></Pressable></View></View>; }
 function PrimaryButton({ label, icon, onPress, disabled }: { label: string; icon?: TabIconName; onPress: () => void; disabled?: boolean }) { return <Pressable accessibilityRole="button" accessibilityState={{disabled:!!disabled}} onPress={onPress} disabled={disabled} style={({pressed}) => [styles.primary, disabled && styles.disabled, pressed && styles.tabPressed]}>{icon ? <Ionicons name={icon} size={20} color={palette.white}/> : null}<Text maxFontSizeMultiplier={1.3} style={styles.primaryText}>{label}</Text></Pressable>; }
 function FilterChip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) { return <Pressable accessibilityRole="button" accessibilityState={{selected:active}} onPress={onPress} style={[styles.paymentFilterChip,active&&styles.paymentFilterChipActive]}><Text style={[styles.paymentFilterChipText,active&&styles.paymentFilterChipTextActive]}>{label}</Text></Pressable>; }
 function PeriodSelector({ value, onChange }: { value: number; onChange: (value: number) => void }) { return <><Text style={styles.fieldLabel}>Cantidad de períodos</Text><View style={styles.periodStepper}><Pressable accessibilityRole="button" accessibilityLabel="Reducir períodos" disabled={value<=1} onPress={() => onChange(Math.max(1,value-1))} style={({pressed})=>[styles.periodStepButton,value<=1&&styles.disabled,pressed&&styles.tabPressed]}><Ionicons name="remove" size={21} color={activeDarkTheme?darkPalette.text:palette.ink}/></Pressable><View style={styles.periodStepValue}><Text style={styles.periodStepNumber}>{value}</Text><Text style={styles.periodStepCaption}>{value===1?'PERÍODO':'PERÍODOS'}</Text></View><Pressable accessibilityRole="button" accessibilityLabel="Aumentar períodos" disabled={value>=24} onPress={() => onChange(Math.min(24,value+1))} style={({pressed})=>[styles.periodStepButton,value>=24&&styles.disabled,pressed&&styles.tabPressed]}><Ionicons name="add" size={21} color={activeDarkTheme?darkPalette.text:palette.ink}/></Pressable></View></>; }
@@ -813,7 +896,7 @@ function withReadableType<T extends StyleSheet.NamedStyles<T>>(source: T): T {
 const baseStyles = StyleSheet.create(withReadableType({
   center:{flex:1,alignItems:'center',justifyContent:'center',backgroundColor:palette.brand},app:{flex:1,backgroundColor:palette.background},content:{flex:1},minTouch:{minHeight:44},
   errorToastLayer:{...StyleSheet.absoluteFillObject,zIndex:1000,elevation:30},errorToast:{position:'absolute',top:Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) + 10 : 54,left:14,right:14,minHeight:72,padding:13,flexDirection:'row',alignItems:'flex-start',gap:10,borderWidth:1,borderColor:'#f8b4ad',borderRadius:15,backgroundColor:'#b42318',shadowColor:'#7a1710',shadowOffset:{width:0,height:6},shadowOpacity:.3,shadowRadius:12,elevation:24},successToast:{borderColor:'#7cc89f',backgroundColor:'#167247',shadowColor:'#0b4a2d'},errorToastBody:{flex:1},errorToastTitle:{color:'#fff',fontSize:13,fontWeight:'900'},errorToastMessage:{marginTop:3,color:'#fff',fontSize:12,lineHeight:17,fontWeight:'600'},errorToastClose:{width:44,height:44,marginTop:-7,marginRight:-7,alignItems:'center',justifyContent:'center',borderRadius:12,backgroundColor:'#ffffff1f'},
-  loginPage:{flex:1,backgroundColor:palette.brand,paddingHorizontal:24,paddingTop:36},loginKeyboardAvoiding:{flex:1},loginScroll:{flexGrow:1},logo:{width:64,height:64,borderRadius:18},loginBrand:{marginTop:16,color:palette.white,fontSize:22,fontWeight:'800'},mini:{color:palette.accent,fontSize:11,letterSpacing:2},loginTitle:{marginTop:44,color:palette.white,fontSize:34,fontWeight:'800',letterSpacing:-1.2},loginCopy:{marginTop:10,color:'#c4d5cd',fontSize:15,lineHeight:22},loginCard:{marginTop:34,padding:20,borderRadius:20,backgroundColor:palette.white},version:{marginTop:'auto',marginBottom:24,textAlign:'center',color:'#a9c3b7',fontSize:10,letterSpacing:2},
+  loginPage:{flex:1,backgroundColor:palette.brand,paddingHorizontal:24,paddingTop:36},loginKeyboardAvoiding:{flex:1},loginScroll:{flexGrow:1},loginBrand:{marginTop:8,color:palette.white,fontSize:22,fontWeight:'800'},mini:{color:palette.accent,fontSize:11,letterSpacing:2},loginTitle:{marginTop:44,color:palette.white,fontSize:34,fontWeight:'800',letterSpacing:-1.2},loginCopy:{marginTop:10,color:'#c4d5cd',fontSize:15,lineHeight:22},loginCard:{marginTop:34,padding:20,borderRadius:20,backgroundColor:palette.white},version:{marginTop:'auto',marginBottom:24,textAlign:'center',color:'#a9c3b7',fontSize:10,letterSpacing:2},
   topbar:{paddingTop:18,paddingHorizontal:20,paddingBottom:14,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:12,backgroundColor:palette.background},topbarTitle:{flex:1,minWidth:0},kicker:{color:palette.action,fontSize:11,fontWeight:'800',letterSpacing:1.2},screenTitle:{marginTop:3,fontSize:27,fontWeight:'800',color:palette.ink,letterSpacing:-.8},avatar:{width:44,height:44,borderRadius:22,alignItems:'center',justifyContent:'center',backgroundColor:palette.accent},
   syncBar:{minHeight:44,marginHorizontal:16,marginBottom:4,paddingHorizontal:12,flexDirection:'row',alignItems:'center',gap:9,borderRadius:12,backgroundColor:'#e8f5ce'},syncOffline:{backgroundColor:'#fff4e8'},syncError:{backgroundColor:'#fee9e5'},syncDot:{width:9,height:9,borderRadius:5,backgroundColor:palette.warning},syncDotOk:{backgroundColor:palette.action},syncMain:{flex:1},syncTitle:{color:palette.ink,fontSize:11,fontWeight:'800'},syncDetail:{marginTop:1,color:palette.secondary,fontSize:9},syncAction:{color:palette.action,fontSize:10,fontWeight:'800'},
   accountScroll:{padding:16,paddingBottom:40},accountHero:{padding:26,alignItems:'center',borderRadius:22,backgroundColor:palette.brand},accountHeroLabel:{color:'#c4d5cd',fontSize:9,fontWeight:'800',letterSpacing:1.3},accountHeroGym:{marginTop:8,color:palette.white,fontSize:23,fontWeight:'900',textAlign:'center'},accountCard:{marginTop:12,paddingHorizontal:17,borderWidth:1,borderColor:palette.line,borderRadius:17,backgroundColor:palette.white},accountRow:{minHeight:61,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:18,borderBottomWidth:1,borderBottomColor:'#edf0ee'},accountRowLast:{borderBottomWidth:0},accountLabel:{color:palette.secondary,fontSize:10,fontWeight:'700'},accountValue:{flex:1,color:palette.ink,fontSize:12,fontWeight:'800',textAlign:'right'},logoutButton:{minHeight:69,marginTop:18,padding:13,flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:'#efcec9',borderRadius:15,backgroundColor:'#fff9f8'},logoutButtonPressed:{opacity:.7},logoutIcon:{width:42,height:42,marginRight:12,alignItems:'center',justifyContent:'center',borderRadius:13,backgroundColor:'#fee5e1'},logoutIconText:{color:palette.danger,fontSize:20,fontWeight:'900'},logoutTitle:{color:palette.danger,fontSize:13,fontWeight:'900'},logoutCopy:{marginTop:4,color:palette.secondary,fontSize:9},accountVersion:{marginTop:28,color:palette.secondary,fontSize:9,letterSpacing:1.2,textAlign:'center'},
@@ -824,7 +907,7 @@ const baseStyles = StyleSheet.create(withReadableType({
   upcomingCard:{marginTop:14,padding:16,borderWidth:1,borderColor:'#f1d2b2',borderRadius:17,backgroundColor:'#fff8ef'},upcomingHead:{flexDirection:'row',alignItems:'center',gap:10},upcomingIcon:{width:38,height:38,alignItems:'center',justifyContent:'center',borderRadius:12,backgroundColor:'#ffecd3'},upcomingTitle:{color:palette.ink,fontSize:13,fontWeight:'900'},upcomingCopy:{marginTop:3,color:palette.secondary,fontSize:9},upcomingCount:{minWidth:32,height:32,paddingHorizontal:8,alignItems:'center',justifyContent:'center',borderRadius:16,backgroundColor:palette.warning},upcomingCountText:{color:palette.white,fontSize:12,fontWeight:'900'},upcomingRow:{marginTop:12,paddingTop:11,flexDirection:'row',alignItems:'center',gap:12,borderTopWidth:1,borderTopColor:'#f1d2b2'},upcomingName:{color:palette.ink,fontSize:11,fontWeight:'800'},upcomingPlan:{marginTop:3,color:palette.secondary,fontSize:9},upcomingDate:{color:palette.warning,fontSize:9,fontWeight:'900',textAlign:'right'},upcomingDays:{marginTop:3,color:palette.secondary,fontSize:8,textAlign:'right'},upcomingAction:{marginTop:13,paddingTop:12,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:6,borderTopWidth:1,borderTopColor:'#f1d2b2'},upcomingActionText:{color:palette.warning,fontSize:10,fontWeight:'900'},upcomingEmpty:{marginTop:13,color:palette.secondary,fontSize:10,textAlign:'center'},
   sectionTitle:{marginTop:26,marginBottom:10},sectionHeading:{fontSize:18,fontWeight:'800',color:palette.ink},sectionCopy:{marginTop:3,color:palette.secondary,fontSize:11},card:{overflow:'hidden',borderWidth:1,borderColor:palette.line,borderRadius:16,backgroundColor:palette.white},paymentRow:{minHeight:65,padding:14,flexDirection:'row',alignItems:'center',borderBottomWidth:1,borderBottomColor:'#edf0ee'},rowMain:{flex:1},rowTitle:{fontSize:13,fontWeight:'700',color:palette.ink},rowSubtitle:{marginTop:4,color:palette.secondary,fontSize:10},income:{color:palette.action,fontSize:12,fontWeight:'800'},empty:{padding:26,textAlign:'center',color:palette.secondary},logoutHint:{marginTop:28,textAlign:'center',color:palette.secondary,fontSize:10},
   paymentFilters:{marginTop:14,padding:15,borderWidth:1,borderColor:palette.line,borderRadius:17,backgroundColor:palette.white},paymentFilterTitle:{color:palette.ink,fontSize:14,fontWeight:'900'},paymentFilterLabel:{marginTop:13,marginBottom:7,color:palette.secondary,fontSize:11,fontWeight:'900',letterSpacing:.7,textTransform:'uppercase'},paymentFilterOptions:{gap:7,paddingRight:5},paymentFilterChip:{minHeight:44,paddingHorizontal:14,alignItems:'center',justifyContent:'center',borderWidth:1,borderColor:palette.line,borderRadius:22,backgroundColor:'#fbfcfb'},paymentFilterChipActive:{borderColor:palette.action,backgroundColor:'#e8f5ce'},paymentFilterChipText:{color:palette.secondary,fontSize:11,fontWeight:'800'},paymentFilterChipTextActive:{color:palette.action},paymentFilterFooter:{marginTop:15,paddingTop:12,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:10,borderTopWidth:1,borderTopColor:'#edf0ee'},paymentFilterResult:{flex:1,color:palette.secondary,fontSize:11,lineHeight:16},excelButton:{minWidth:104,minHeight:44,paddingHorizontal:13,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:6,borderRadius:11,backgroundColor:palette.action},excelButtonText:{color:palette.white,fontSize:12,fontWeight:'900'},paymentList:{gap:12},listSeparator:{height:12},paymentDetailRow:{padding:16,borderWidth:1,borderColor:palette.line,borderRadius:16,backgroundColor:palette.white,shadowColor:palette.brand,shadowOffset:{width:0,height:3},shadowOpacity:.06,shadowRadius:8,elevation:2},paymentDetailRowCancelled:{borderColor:'#efc9c3',backgroundColor:'#fff8f7'},paymentDetailRowPressed:{borderColor:'#b9cfbf',backgroundColor:'#f5f8f6'},paymentDetailHead:{flexDirection:'row',alignItems:'flex-start',gap:10},paymentBadge:{minHeight:28,paddingVertical:5,paddingHorizontal:9,justifyContent:'center',borderRadius:12,backgroundColor:'#fff0d8'},paymentBadgeSuccess:{backgroundColor:'#e1f4e8'},paymentBadgeDanger:{backgroundColor:'#fee6e2'},paymentBadgeText:{color:'#996018',fontSize:10,fontWeight:'900'},paymentBadgeTextSuccess:{color:palette.action},paymentBadgeTextDanger:{color:palette.danger},paymentAmounts:{marginTop:14,flexDirection:'row',justifyContent:'space-between'},paymentAmountLabel:{color:palette.secondary,fontSize:10,fontWeight:'800',letterSpacing:.8},paymentAmountRight:{textAlign:'right'},paymentPaid:{marginTop:4,color:palette.action,fontSize:14,fontWeight:'900'},paymentPaidCancelled:{color:palette.danger,textDecorationLine:'line-through'},paymentTotal:{marginTop:4,color:palette.ink,fontSize:14,fontWeight:'900',textAlign:'right'},paymentTotalCancelled:{color:palette.danger,textDecorationLine:'line-through'},paymentProgress:{height:5,marginTop:12,overflow:'hidden',borderRadius:3,backgroundColor:'#e8ece9'},paymentProgressFill:{height:'100%',borderRadius:3,backgroundColor:palette.action},paymentOperations:{marginTop:13,paddingTop:10,borderTopWidth:1,borderTopColor:'#edf0ee'},paymentOperationsTitle:{marginBottom:3,color:palette.secondary,fontSize:10,fontWeight:'900',letterSpacing:.8},paymentOperation:{minHeight:44,paddingVertical:7,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:12},paymentOperationAmount:{color:palette.action,fontSize:12,fontWeight:'800'},paymentOperationDate:{color:palette.secondary,fontSize:11},paymentNoOperations:{marginTop:11,color:palette.secondary,fontSize:11},paymentBalanceCopy:{marginTop:8,color:palette.warning,fontSize:11,fontWeight:'800'},paymentCancelledCopy:{marginTop:10,paddingTop:9,borderTopWidth:1,borderTopColor:'#efc9c3',color:palette.danger,fontSize:11,fontWeight:'800'},
-  memberSearch:{height:52,marginTop:14,paddingLeft:14,paddingRight:4,gap:10,flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:palette.line,borderRadius:14,backgroundColor:palette.white},memberSearchIcon:{marginRight:9,color:palette.action,fontSize:21},memberSearchInput:{height:'100%',flex:1,color:palette.ink,fontSize:13},memberSearchClear:{width:44,height:44,alignItems:'center',justifyContent:'center',borderRadius:12,backgroundColor:'#eef2ef'},memberSearchClearText:{color:palette.secondary,fontSize:20,lineHeight:22},memberFormPage:{flex:1,backgroundColor:palette.background},memberFormHeader:{paddingHorizontal:16,paddingTop:8,paddingBottom:13,borderBottomWidth:1,borderBottomColor:palette.line,backgroundColor:palette.background},memberFormHeaderRow:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:8},memberFormBack:{minWidth:72,minHeight:44,flexDirection:'row',alignItems:'center',gap:6},memberFormBackText:{color:palette.ink,fontSize:12,fontWeight:'800'},memberFormStep:{color:palette.secondary,fontSize:10,fontWeight:'900',letterSpacing:.7},memberFormNext:{minWidth:100,minHeight:44,paddingHorizontal:10,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:5,borderRadius:11,backgroundColor:palette.action},memberFormNextText:{color:palette.white,fontSize:12,fontWeight:'900'},memberFormProgress:{marginTop:12,marginBottom:13,flexDirection:'row',gap:5},memberFormProgressPart:{height:4,flex:1,borderRadius:2,backgroundColor:'#d9dfdb'},memberFormProgressPartActive:{backgroundColor:palette.action},memberFormTitle:{color:palette.ink,fontSize:22,fontWeight:'900'},memberFormCopy:{marginTop:3,color:palette.secondary,fontSize:12},memberFormScroll:{flex:1},memberFormContent:{padding:16,paddingBottom:32},memberFormFooter:{paddingHorizontal:16,paddingTop:11,paddingBottom:12,borderTopWidth:1,borderTopColor:palette.line,backgroundColor:palette.white},
+  memberSearch:{height:52,marginTop:14,paddingLeft:14,paddingRight:4,gap:10,flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:palette.line,borderRadius:14,backgroundColor:palette.white},memberSearchIcon:{marginRight:9,color:palette.action,fontSize:21},memberSearchInput:{height:'100%',flex:1,color:palette.ink,fontSize:13},memberSearchClear:{width:44,height:44,alignItems:'center',justifyContent:'center',borderRadius:12,backgroundColor:'#eef2ef'},memberSearchClearText:{color:palette.secondary,fontSize:20,lineHeight:22},memberFormPage:{flex:1,backgroundColor:palette.background},memberFormHeader:{paddingHorizontal:16,paddingTop:8,paddingBottom:13,borderBottomWidth:1,borderBottomColor:palette.line,backgroundColor:palette.background},memberFormHeaderRow:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:8},memberFormBack:{minWidth:72,minHeight:44,flexDirection:'row',alignItems:'center',gap:6},memberFormBackText:{color:palette.ink,fontSize:12,fontWeight:'800'},memberFormStep:{color:palette.secondary,fontSize:10,fontWeight:'900',letterSpacing:.7},memberFormNext:{minWidth:100,minHeight:44,paddingHorizontal:10,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:5,borderRadius:11,backgroundColor:palette.action},memberFormNextText:{color:palette.white,fontSize:12,fontWeight:'900'},memberFormProgress:{marginTop:12,marginBottom:13,flexDirection:'row',gap:5},memberFormProgressPart:{height:4,flex:1,borderRadius:2,backgroundColor:'#d9dfdb'},memberFormProgressPartActive:{backgroundColor:palette.action},memberFormTitle:{color:palette.ink,fontSize:22,fontWeight:'900'},memberFormCopy:{marginTop:3,color:palette.secondary,fontSize:12},memberFormScroll:{flex:1},memberFormContent:{padding:16,paddingBottom:32},memberFormContentKeyboard:{paddingBottom:280},memberFormFooter:{paddingHorizontal:16,paddingTop:11,paddingBottom:12,borderTopWidth:1,borderTopColor:palette.line,backgroundColor:palette.white},
   memberFilters:{paddingTop:12,flexDirection:'row',flexWrap:'wrap',gap:8},memberFilter:{minHeight:44,paddingHorizontal:12,flexDirection:'row',alignItems:'center',gap:7,borderWidth:1,borderColor:palette.line,borderRadius:22,backgroundColor:palette.white},memberFilterActive:{borderColor:palette.action,backgroundColor:'#eef7e1'},memberFilterText:{color:palette.secondary,fontSize:12,fontWeight:'800'},memberFilterTextActive:{color:palette.action},memberFilterCount:{minWidth:24,height:24,paddingHorizontal:6,alignItems:'center',justifyContent:'center',borderRadius:12,backgroundColor:'#eef2ef'},memberFilterCountActive:{backgroundColor:palette.action},memberFilterCountText:{color:palette.secondary,fontSize:10,fontWeight:'900'},memberFilterCountTextActive:{color:palette.white},memberPlanDotUpcoming:{backgroundColor:palette.warning},memberPlanTextUpcoming:{color:palette.warning,fontWeight:'800'},memberPlanDotExpired:{backgroundColor:palette.warning},memberPlanTextExpired:{color:palette.warning},
   primary:{minHeight:49,flexDirection:'row',gap:8,alignItems:'center',justifyContent:'center',borderRadius:12,backgroundColor:palette.action},primaryText:{color:palette.white,fontSize:14,fontWeight:'800'},disabled:{opacity:.45},memberRow:{minHeight:80,padding:12,flexDirection:'row',alignItems:'center',borderBottomWidth:1,borderBottomColor:'#edf0ee'},memberListRow:{marginBottom:10,borderWidth:1,borderBottomWidth:1,borderColor:palette.line,borderRadius:16,backgroundColor:palette.white},memberRowPressed:{backgroundColor:'#f3f8f4'},memberAvatar:{width:48,height:48,marginRight:11,borderRadius:15,alignItems:'center',justifyContent:'center',backgroundColor:'#e8f5ce'},memberAvatarText:{color:palette.brand,fontSize:13,fontWeight:'900'},memberPlanLine:{marginTop:6,flexDirection:'row',alignItems:'center',gap:5},memberPlanDot:{width:7,height:7,borderRadius:4,backgroundColor:'#c0c7c3'},memberPlanDotActive:{backgroundColor:palette.action},memberPlanText:{flex:1,color:palette.secondary,fontSize:11},memberChevron:{marginLeft:8,color:palette.secondary,fontSize:28,fontWeight:'300'},memberProfile:{marginBottom:12,padding:16,flexDirection:'row',alignItems:'center',borderRadius:16,backgroundColor:'#f3f7f3'},memberProfileAvatar:{width:52,height:52,marginRight:13,alignItems:'center',justifyContent:'center',borderRadius:17,backgroundColor:palette.accent},memberProfileInitials:{color:palette.brand,fontSize:15,fontWeight:'900'},memberProfileName:{color:palette.ink,fontSize:16,fontWeight:'900'},memberProfileMeta:{marginTop:4,color:palette.secondary,fontSize:12},memberProfilePlan:{marginTop:6,color:palette.action,fontSize:12,fontWeight:'700'},memberProfileExpiry:{marginTop:4,color:palette.secondary,fontSize:11,fontWeight:'700'},scheduledMembershipCard:{marginBottom:12,padding:13,borderWidth:1,borderColor:'#f1d2b2',borderRadius:14,backgroundColor:'#fff8ef'},scheduledMembershipLabel:{color:palette.warning,fontSize:10,fontWeight:'900',letterSpacing:.8},scheduledMembershipPlan:{marginTop:5,color:palette.ink,fontSize:13,fontWeight:'900'},scheduledMembershipDates:{marginTop:4,color:palette.secondary,fontSize:11,fontWeight:'700'},scheduledMembershipActions:{marginTop:12,paddingTop:10,flexDirection:'row',gap:8,borderTopWidth:1,borderTopColor:'#f1d2b2'},scheduledMembershipButton:{flex:1,minHeight:44,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:6,borderWidth:1,borderColor:'#cfe3d6',borderRadius:10,backgroundColor:palette.white},scheduledMembershipDeleteButton:{borderColor:'#f0d8d4'},scheduledMembershipButtonText:{color:palette.action,fontSize:12,fontWeight:'900'},memberActionGrid:{gap:10},memberActionCard:{minHeight:76,padding:13,flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:palette.line,borderRadius:15,backgroundColor:'#fbfcfb'},memberActionCardPlan:{borderColor:'#dce8ca',backgroundColor:'#fbfdf7'},memberActionCardRenew:{borderColor:'#f1d2b2',backgroundColor:'#fffaf3'},memberActionCardDelete:{minHeight:64,borderColor:'#f0d8d4',backgroundColor:'#fffafa'},memberActionCardPressed:{opacity:.72,transform:[{scale:.99}]},memberActionIcon:{width:44,height:44,marginRight:12,alignItems:'center',justifyContent:'center',borderRadius:13,backgroundColor:'#e6f1ea'},memberActionIconPlan:{backgroundColor:'#e8f5ce'},memberActionIconRenew:{backgroundColor:'#fff0dc'},memberActionIconDelete:{backgroundColor:'#fee9e5'},memberActionIconText:{color:palette.action,fontSize:19,fontWeight:'900'},memberActionDeleteText:{color:palette.danger},memberActionTitle:{color:palette.ink,fontSize:13,fontWeight:'900'},memberActionCopy:{marginTop:4,color:palette.secondary,fontSize:11,lineHeight:16},memberActionChevron:{marginLeft:8,color:palette.secondary,fontSize:25},planCard:{minHeight:76,marginBottom:10,padding:16,flexDirection:'row',gap:10,justifyContent:'space-between',alignItems:'center',borderWidth:1,borderColor:palette.line,borderRadius:16,backgroundColor:palette.white},planName:{flexShrink:1,fontSize:15,fontWeight:'800',color:palette.ink},planPrice:{maxWidth:100,fontSize:15,fontWeight:'800',color:palette.action},debtCard:{position:'relative',overflow:'hidden',padding:22,borderWidth:1,borderColor:'#f1d2b2',borderRadius:22,backgroundColor:'#fff7ed',shadowColor:palette.warning,shadowOffset:{width:0,height:5},shadowOpacity:.1,shadowRadius:12,elevation:3},debtGlowLarge:{position:'absolute',right:-42,top:-58,width:150,height:150,borderRadius:75,backgroundColor:'#e28d3630'},debtGlowSmall:{position:'absolute',right:58,bottom:-37,width:76,height:76,borderRadius:38,backgroundColor:'#c9f47b45'},debtHeader:{flexDirection:'row',alignItems:'center'},debtIcon:{width:44,height:44,marginRight:12,alignItems:'center',justifyContent:'center',borderRadius:13,backgroundColor:palette.brand},debtIconText:{color:palette.accent,fontSize:18,fontWeight:'900'},debtLabel:{color:palette.warning,fontSize:11,fontWeight:'900',letterSpacing:1.1},debtSubtitle:{marginTop:3,color:palette.secondary,fontSize:12},debtValue:{marginTop:18,color:palette.ink,fontSize:32,fontWeight:'900',letterSpacing:-.8},debtFooter:{marginTop:18,paddingTop:13,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:8,borderTopWidth:1,borderTopColor:'#f1d2b2'},debtPending:{flex:1,color:palette.ink,fontSize:12,fontWeight:'800'},debtState:{minHeight:32,paddingVertical:5,paddingHorizontal:8,flexDirection:'row',alignItems:'center',gap:5,borderRadius:10,backgroundColor:palette.white},debtStateDot:{width:7,height:7,borderRadius:4,backgroundColor:palette.warning},debtStateText:{color:palette.warning,fontSize:10,fontWeight:'900'},balance:{textAlign:'right',color:palette.ink,fontSize:12,fontWeight:'800'},balanceLabel:{marginTop:3,textAlign:'right',color:palette.secondary,fontSize:11},
   debtCardGreen:{borderColor:'#2d624d',backgroundColor:palette.brand,shadowColor:palette.brand},debtGlowLargeGreen:{backgroundColor:'#2d765855'},debtIconGreen:{backgroundColor:'#ffffff18'},debtLabelGreen:{color:palette.accent},debtSubtitleGreen:{color:'#c4d5cd'},debtValueGreen:{color:palette.white},debtFooterGreen:{borderTopColor:'#ffffff26'},debtPendingGreen:{color:'#e7f0eb'},debtStateGreen:{backgroundColor:'#ffffff14'},debtStateDotGreen:{backgroundColor:palette.accent},debtStateTextGreen:{color:palette.accent},
@@ -834,6 +917,7 @@ const baseStyles = StyleSheet.create(withReadableType({
   tabbar:{minHeight:66,marginHorizontal:12,marginBottom:8,paddingVertical:5,flexDirection:'row',borderWidth:1,borderColor:palette.line,borderRadius:22,backgroundColor:palette.white,shadowColor:palette.brand,shadowOffset:{width:0,height:4},shadowOpacity:.14,shadowRadius:10,elevation:8},tab:{minHeight:48,flex:1,alignItems:'center',justifyContent:'center'},tabPressed:{opacity:.65},tabIconWrap:{width:44,height:30,alignItems:'center',justifyContent:'center'},tabIconWrapActive:{overflow:'hidden',borderRadius:15,backgroundColor:'#e8f5ce'},tabLabel:{marginTop:2,color:palette.secondary,fontSize:11,fontWeight:'700'},tabActive:{color:palette.action,fontWeight:'900'},
   currentPlanCard:{marginBottom:14,padding:14,borderWidth:1,borderColor:'#cfe3d6',borderRadius:13,backgroundColor:'#f4faf6'},currentMembershipLabel:{marginTop:6,color:palette.secondary,fontSize:8,fontWeight:'900',letterSpacing:.8},currentPlanName:{marginTop:5,color:palette.ink,fontSize:14,fontWeight:'900'},currentPlanMeta:{marginTop:4,color:palette.secondary,fontSize:9,fontWeight:'700'},membershipExpiryPreview:{marginTop:-6,marginBottom:18,padding:14,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:14,borderWidth:1,borderColor:'#cfe3d6',borderRadius:13,backgroundColor:'#f4faf6'},membershipExpiryLabel:{color:palette.secondary,fontSize:8,fontWeight:'900',letterSpacing:.8},membershipExpiryDate:{marginTop:5,color:palette.ink,fontSize:13,fontWeight:'900'},membershipExpiryDays:{color:palette.action,fontSize:10,fontWeight:'900',textAlign:'right'},
   periodStepper:{height:58,marginBottom:16,padding:5,flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:palette.line,borderRadius:13,backgroundColor:'#fbfcfb'},periodStepButton:{width:48,height:48,alignItems:'center',justifyContent:'center',borderRadius:10,backgroundColor:'#e8f5ce'},periodStepValue:{flex:1,alignItems:'center',justifyContent:'center'},periodStepNumber:{color:palette.ink,fontSize:18,fontWeight:'900'},periodStepCaption:{marginTop:1,color:palette.secondary,fontSize:10,fontWeight:'900',letterSpacing:.8},purchasePreview:{marginBottom:16,padding:14,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:14,borderWidth:1,borderColor:'#cfe3d6',borderRadius:13,backgroundColor:'#f4faf6'},purchasePreviewLabel:{color:palette.secondary,fontSize:10,fontWeight:'900',letterSpacing:.8},purchasePreviewValue:{marginTop:5,color:palette.action,fontSize:16,fontWeight:'900'},purchasePreviewMeta:{marginTop:3,color:palette.secondary,fontSize:11,fontWeight:'700'},purchasePreviewDate:{marginTop:5,color:palette.ink,fontSize:12,fontWeight:'900',textAlign:'right'},
+  passwordInputShell:{minHeight:48,paddingLeft:14,paddingRight:2,flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:palette.line,borderRadius:11,backgroundColor:'#fafbf9'},passwordInput:{minHeight:46,flex:1,color:palette.ink,fontSize:14},passwordVisibilityButton:{width:44,height:44,alignItems:'center',justifyContent:'center',borderRadius:10},
   skeletonList:{gap:10},skeletonRow:{minHeight:80,padding:14,flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:palette.line,borderRadius:16,backgroundColor:palette.white},skeletonAvatar:{width:48,height:48,marginRight:12,borderRadius:15,backgroundColor:'#dce5df'},skeletonBody:{flex:1,gap:8},skeletonTitle:{width:'68%',height:14,borderRadius:7,backgroundColor:'#dce5df'},skeletonCopy:{width:'88%',height:10,borderRadius:5,backgroundColor:'#e5ebe7'},skeletonCopyShort:{width:'52%',height:10,borderRadius:5,backgroundColor:'#e5ebe7'},
 }));
 
@@ -1073,6 +1157,8 @@ const darkStyles = StyleSheet.create({
   tabIconWrapActive:{backgroundColor:darkPalette.actionSoft},
   tabLabel:{color:darkPalette.secondary},
   tabActive:{color:palette.accent},
+  passwordInputShell:{borderColor:darkPalette.border,backgroundColor:'#151b17'},
+  passwordInput:{color:darkPalette.text},
   skeletonRow:{borderColor:darkPalette.border,backgroundColor:darkPalette.surface},
   skeletonAvatar:{backgroundColor:'#354039'},
   skeletonTitle:{backgroundColor:'#354039'},

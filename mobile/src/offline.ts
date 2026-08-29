@@ -1,6 +1,7 @@
 import * as Network from 'expo-network';
 import * as SQLite from 'expo-sqlite';
 import { api, ApiError } from './api';
+import { initializeTrustedClock, recordServerTime } from './trustedClock';
 import type { Dashboard, Member, Membership, Movement, Payment, Plan, SyncIssue, SyncOperation, SyncOperationType, SyncSnapshot, SyncState } from './types';
 
 const dbPromise = SQLite.openDatabaseAsync('gymflow-mini-offline.db');
@@ -24,6 +25,7 @@ function uuid() {
 async function db() { return dbPromise; }
 
 export async function initializeOffline(scope: string) {
+  await initializeTrustedClock(scope);
   const database = await db();
   await database.execAsync(`
     PRAGMA journal_mode = WAL;
@@ -429,6 +431,7 @@ async function performSync(scope: string): Promise<SyncState> {
       }
     }
     const snapshot = await api.syncSnapshot();
+    await recordServerTime(scope, snapshot.serverTime);
     await applySnapshot(scope, snapshot);
     emit();
     return updateState(scope, 'SYNCED', { lastSync: snapshot.serverTime, message: undefined });

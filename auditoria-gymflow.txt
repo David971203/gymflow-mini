@@ -1,0 +1,99 @@
+AUDITORÍA ACTUAL DE GYMFLOW MINI
+================================
+
+La base es buena para un MVP, pero encontré varias inconsistencias importantes. No detecté errores de compilación: pasaron las 45 pruebas del backend, el build, TypeScript móvil y el lint web.
+
+PRIORIDAD CRÍTICA
+-----------------
+
+1. Un administrador desactivado puede seguir operando temporalmente.
+El JWT dura 12 horas y el backend confía en sus datos sin verificar en cada petición si el usuario continúa activo. Si se desactiva un administrador, sus escrituras podrían seguir funcionando mientras el gimnasio permanezca activo.
+Archivo: backend/src/jwt.strategy.ts, línea 12.
+
+2. El estado del miembro y el de su membresía pueden contradecirse.
+Es posible marcar manualmente un miembro como inactivo aunque tenga membresía vigente. Además, cuando una membresía vence automáticamente, el servicio no convierte al miembro en inactivo. Esto afecta filtros, métricas y notificaciones.
+Archivo: backend/src/membership-expiration.service.ts, línea 21.
+
+3. Eliminar una membresía desde el panel no actualiza el estado del miembro.
+La cancelación desde la app sí puede ponerlo inactivo, pero deleteGymMembership cancela o elimina la membresía sin recalcular el estado del miembro.
+Archivo: backend/src/mini.service.ts, línea 317.
+
+4. Una renovación programada puede ocultar la membresía activa.
+El snapshot devuelve solamente la membresía más recientemente creada por miembro. Como la renovación programada es normalmente la más nueva, la activa puede desaparecer de la app, aunque la interfaz programada esté oculta.
+Archivo: backend/src/mini.service.ts, línea 435.
+
+5. Las fechas financieras todavía pueden manipularse desde el teléfono.
+El límite de 72 horas protege el acceso, pero operaciones offline como abonos y registros siguen enviando occurredAt usando la fecha del celular. Un reloj alterado podría colocar ingresos en otro día o mes.
+Archivo: backend/src/mini.service.ts, línea 618.
+
+6. El panel web todavía precarga credenciales de superadministrador.
+En producción deben iniciar vacías. Además, el JWT del panel se guarda en localStorage, aumentando el impacto potencial de una vulnerabilidad XSS.
+Archivo: superadmin-web/app/page.tsx, línea 209.
+
+LÓGICA Y FLUJO
+--------------
+
+- La sesión offline dice durar 14 días, pero el JWT vence en 12 horas. Al recuperar conexión después de ese tiempo, puede exigir iniciar sesión nuevamente aunque la sesión offline todavía parezca válida.
+
+- Crear miembro y asignar plan son dos operaciones separadas. Si la segunda falla, queda un miembro creado sin plan aunque el flujo diga “creado con su plan inicial”. Esto ocurre especialmente en el panel web.
+  Archivo: superadmin-web/app/page.tsx, línea 339.
+
+- Las activaciones programadas se procesan una vez al día. Una membresía puede haber comenzado según su fecha, pero permanecer SCHEDULED en el backend hasta la siguiente ejecución.
+
+- El panel muestra cobros programados antes de su vencimiento, mientras que la app móvil los oculta hasta que corresponde cobrarlos.
+
+- Los balances del panel incluyen cobros futuros como “por cobrar”, aunque todavía no sean exigibles.
+
+- Cancelar un cobro elimina sus movimientos de los totales históricos. Cumple con descontar lo cobrado, pero contablemente sería mejor registrar un movimiento de anulación con fecha, motivo y responsable.
+
+- La app muestra todos los miembros en la métrica “Miembros”, incluidos archivados o inactivos. El significado del indicador no queda claro.
+
+- El panel web muestra el plan mutable actual en algunos historiales, mientras que la app móvil usa correctamente la copia histórica del plan contratado.
+
+MODO OFFLINE
+------------
+
+- El reloj confiable de 72 horas detecta retrocesos visibles y usa tiempo monotónico mientras la app está abierta. Sin embargo, no es invulnerable si el teléfono permanece cerrado con la fecha congelada antes de volver a abrir la app.
+
+- Las acciones offline muestran toast verde inmediatamente, aunque todavía no hayan sido aceptadas por el servidor. Sería más correcto decir “Guardado en el dispositivo, pendiente de sincronizar”.
+
+- Un cambio rechazado puede aparecer exitoso primero y revertirse al descargar el snapshot.
+
+- Cada minuto se actualiza el reloj y también se incrementa la revisión global. Eso recarga la pantalla actual y vuelve a procesar las notificaciones innecesariamente.
+  Archivo: mobile/App.tsx, línea 362.
+
+- Los snapshots descargan todos los miembros, pagos, movimientos y planes. FlatList mejora el renderizado, pero no evita que SQLite, la red y el backend se ralenticen con miles de registros.
+
+UX Y PRODUCTO
+-------------
+
+- No se muestra cuánto tiempo offline queda antes de exigir sincronización.
+
+- La barra puede decir “Datos al día” y simultáneamente indicar cambios rechazados.
+
+- Las notificaciones son locales, no push reales del servidor. Si el plan cambia desde otro dispositivo, la notificación no se actualiza hasta abrir y sincronizar la app.
+
+- Las notificaciones también dependen del reloj del teléfono.
+
+- No existe recuperación de contraseña, cambio de contraseña ni bloqueo biométrico.
+
+- CI, teléfonos, direcciones y finanzas se guardan en SQLite sin cifrado adicional y pueden exportarse a una carpeta compartida sin advertencia de privacidad.
+
+- La configuración actual solo genera Android; los enlaces futuros a App Store no corresponden todavía con una aplicación iOS.
+  Archivo: mobile/app.json, línea 6.
+
+- La documentación está desactualizada: todavía dice que no hay notificaciones y conserva las credenciales demo.
+  Archivo: README.md, línea 33.
+
+- No existen pruebas automatizadas para la app móvil, sincronización visual, reloj confiable ni notificaciones.
+
+ORDEN RECOMENDADO DE IMPLEMENTACIÓN
+-----------------------------------
+
+1. Cerrar la autorización de administradores desactivados.
+2. Unificar estado de miembro y membresía.
+3. Devolver todas las membresías relevantes en el snapshot.
+4. Corregir cancelación/eliminación y contabilidad.
+5. Usar hora del servidor para operaciones financieras.
+6. Mejorar mensajes offline y eliminar credenciales web.
+7. Añadir paginación, pruebas móviles y protección de datos.

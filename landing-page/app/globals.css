@@ -151,6 +151,7 @@ h1, h2, h3, p { margin-top: 0; }
 
 .showcase { background: var(--dark); color: white; min-height: 735px; padding-top: 102px; padding-bottom: 102px; display: grid; grid-template-columns: 1.1fr .9fr; align-items: center; gap: 7vw; overflow: hidden; }
 .showcase-visual { min-height: 510px; position: relative; }
+.showcase-visual:before { content: ""; width: min(380px, 90%); aspect-ratio: 1; position: absolute; left: 50%; top: 50%; border-radius: 50%; background: rgba(201,244,123,.9); transform: translate(-50%,-50%); }
 .dashboard-large { width: min(56vw, 760px); min-width: 680px; left: -7vw; top: 50%; transform: translateY(-50%); }
 .dashboard-large aside { width: 145px; padding: 17px 11px; border-right: 1px solid var(--line); background: white; }
 .dashboard-large aside .brand img { width: 26px; height: 26px; border-radius: 7px; }

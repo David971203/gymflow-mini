@@ -38,6 +38,24 @@ type Gym = {
 };
 
 const API = `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3100"}/api`;
+const CUBAN_PROVINCES = [
+  "Pinar del Río",
+  "Artemisa",
+  "La Habana",
+  "Mayabeque",
+  "Matanzas",
+  "Cienfuegos",
+  "Villa Clara",
+  "Sancti Spíritus",
+  "Ciego de Ávila",
+  "Camagüey",
+  "Las Tunas",
+  "Holguín",
+  "Granma",
+  "Santiago de Cuba",
+  "Guantánamo",
+  "Isla de la Juventud",
+] as const;
 const demoSubscriptionEnd = new Date(); demoSubscriptionEnd.setFullYear(demoSubscriptionEnd.getFullYear() + 1);
 const recentMonthKeys = () => Array.from({ length: 6 }, (_, index) => { const date = new Date(); date.setDate(1); date.setMonth(date.getMonth() - (5 - index)); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`; });
 const demoOverview: Overview = { gyms: 3, activeGyms: 3, members: 341, newMembers: 38, monthlyRevenue: 98050, pendingDebt: 12300, memberTrend: recentMonthKeys().map((month, index) => ({ month, members: [21, 28, 25, 31, 34, 38][index] })), subscriptionMonthlyRevenue:55000, subscriptionTotalRevenue:55000, activeTrialSubscriptions:1, activeMonthlySubscriptions:1, activeAnnualSubscriptions:1, expiredSubscriptions:0, withoutSubscriptions:0, pendingSubscriptionRequests:1 };
@@ -247,7 +265,7 @@ function CreateGym({token,onClose,onCreated}:{token:string;onClose:()=>void;onCr
     try { await api("/platform/gyms",token,{method:"POST",body:JSON.stringify(Object.fromEntries(form))}); onCreated(); }
     catch(reason){setError((reason as Error).message);}
   };
-  return <div className="modal" role="dialog" aria-modal="true" aria-label="Añadir gimnasio"><form className="modal-card" onSubmit={submit}><ModalHead eyebrow="NUEVO CLIENTE" title="Añadir gimnasio" onClose={onClose}/><label>Nombre<input name="name" required/></label><label>Identificador<input name="slug" placeholder="ej. titan-gym" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required/></label><div className="two"><label>Provincia<input name="province"/></label><label>Teléfono<input name="phone"/></label></div><div className="two"><label>Moneda del gimnasio<select name="currency" defaultValue="CUP" required><option value="CUP">CUP · Peso cubano</option><option value="USD">USD · Dólar estadounidense</option></select></label><label>Plan de suscripción<select name="subscriptionPlan" value={subscriptionPlan} onChange={event=>setSubscriptionPlan(event.target.value as SubscriptionPlan)} required><option value="TRIAL">Prueba gratuita</option><option value="MONTHLY">Mensual · 1 mes</option><option value="ANNUAL">Anual · 1 año</option></select></label></div>{subscriptionPlan==="TRIAL"&&<label>Días de prueba<input name="subscriptionTrialDays" type="number" min="1" max="365" step="1" defaultValue="7" required/></label>}<div className="two"><label>Administrador<input name="adminName" required/></label><label>Correo<input name="adminEmail" type="email" required/></label></div><label>Contraseña temporal<input name="adminPassword" type="password" minLength={8} required/></label>{error&&<div className="form-error">{error}</div>}<button className="submit">Crear gimnasio y suscripción</button></form></div>;
+  return <div className="modal" role="dialog" aria-modal="true" aria-label="Añadir gimnasio"><form className="modal-card" onSubmit={submit}><ModalHead eyebrow="NUEVO CLIENTE" title="Añadir gimnasio" onClose={onClose}/><label>Nombre<input name="name" required/></label><label>Identificador<input name="slug" placeholder="ej. titan-gym" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required/></label><div className="two"><label>Provincia<select name="province" defaultValue=""><option value="">Seleccionar provincia</option>{CUBAN_PROVINCES.map(province=><option key={province} value={province}>{province}</option>)}</select></label><label>Teléfono<input name="phone"/></label></div><div className="two"><label>Moneda del gimnasio<select name="currency" defaultValue="CUP" required><option value="CUP">CUP · Peso cubano</option><option value="USD">USD · Dólar estadounidense</option></select></label><label>Plan de suscripción<select name="subscriptionPlan" value={subscriptionPlan} onChange={event=>setSubscriptionPlan(event.target.value as SubscriptionPlan)} required><option value="TRIAL">Prueba gratuita</option><option value="MONTHLY">Mensual · 1 mes</option><option value="ANNUAL">Anual · 1 año</option></select></label></div>{subscriptionPlan==="TRIAL"&&<label>Días de prueba<input name="subscriptionTrialDays" type="number" min="1" max="365" step="1" defaultValue="7" required/></label>}<div className="two"><label>Administrador<input name="adminName" required/></label><label>Correo<input name="adminEmail" type="email" required/></label></div><label>Contraseña temporal<input name="adminPassword" type="password" minLength={8} required/></label>{error&&<div className="form-error">{error}</div>}<button className="submit">Crear gimnasio y suscripción</button></form></div>;
 }
 
 function ManageGym({ token, gym, demo, onClose, onChanged }: { token: string; gym: Gym; demo: boolean; onClose: () => void; onChanged: () => Promise<void> }) {
@@ -384,7 +402,7 @@ function ConfirmSubscriptionRemoval({ gymName, deleting, onCancel, onConfirm }: 
 function GymEditor({ gym, disabled, onSave }: { gym: Gym; disabled: boolean; onSave: (payload: Record<string, unknown>) => Promise<void> }) {
   const [error,setError]=useState(""); const [saving,setSaving]=useState(false);
   const submit=async(event:FormEvent<HTMLFormElement>)=>{event.preventDefault();setSaving(true);setError("");const form=new FormData(event.currentTarget);const payload={...Object.fromEntries(form),isActive:form.get("isActive")==="on"};try{await onSave(payload);}catch(reason){setError((reason as Error).message);}finally{setSaving(false);}};
-  return <form className="editor-form" onSubmit={submit}><div className="form-grid"><label>Nombre<input name="name" defaultValue={gym.name} required disabled={disabled}/></label><label>Identificador<input name="slug" defaultValue={gym.slug} pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required disabled={disabled}/></label><label>Provincia<input name="province" defaultValue={gym.province ?? ""} disabled={disabled}/></label><label>Teléfono<input name="phone" defaultValue={gym.phone ?? ""} disabled={disabled}/></label><label>Moneda del gimnasio<select name="currency" defaultValue={gym.currency ?? "CUP"} required disabled={disabled}><option value="CUP">CUP · Peso cubano</option><option value="USD">USD · Dólar estadounidense</option></select></label><label className="check-label"><input name="isActive" type="checkbox" defaultChecked={gym.isActive} disabled={disabled}/><span>Gimnasio activo y con acceso habilitado</span></label></div>{error&&<div className="form-error">{error}</div>}<button className="submit compact" disabled={disabled||saving}>{saving?"Guardando…":"Guardar información"}</button></form>;
+  return <form className="editor-form" onSubmit={submit}><div className="form-grid"><label>Nombre<input name="name" defaultValue={gym.name} required disabled={disabled}/></label><label>Identificador<input name="slug" defaultValue={gym.slug} pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required disabled={disabled}/></label><label>Provincia<select name="province" defaultValue={gym.province ?? ""} disabled={disabled}><option value="">Seleccionar provincia</option>{gym.province&&!CUBAN_PROVINCES.includes(gym.province as typeof CUBAN_PROVINCES[number])&&<option value={gym.province}>{gym.province}</option>}{CUBAN_PROVINCES.map(province=><option key={province} value={province}>{province}</option>)}</select></label><label>Teléfono<input name="phone" defaultValue={gym.phone ?? ""} disabled={disabled}/></label><label>Moneda del gimnasio<select name="currency" defaultValue={gym.currency ?? "CUP"} required disabled={disabled}><option value="CUP">CUP · Peso cubano</option><option value="USD">USD · Dólar estadounidense</option></select></label><label className="check-label"><input name="isActive" type="checkbox" defaultChecked={gym.isActive} disabled={disabled}/><span>Gimnasio activo y con acceso habilitado</span></label></div>{error&&<div className="form-error">{error}</div>}<button className="submit compact" disabled={disabled||saving}>{saving?"Guardando…":"Guardar información"}</button></form>;
 }
 
 function SubscriptionEditor({ gym, disabled, onRenew, onRemove }: { gym: Gym; disabled: boolean; onRenew: (plan: SubscriptionPlan, trialDays?: number) => Promise<void>; onRemove:()=>Promise<void> }) {

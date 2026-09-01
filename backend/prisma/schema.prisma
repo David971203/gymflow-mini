@@ -18,6 +18,13 @@ enum GymSubscriptionPlan {
   ANNUAL
 }
 
+enum SubscriptionRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
 enum MemberStatus {
   ACTIVE
   INACTIVE
@@ -65,6 +72,31 @@ model Gym {
   payments              Payment[]
   syncReceipts          SyncReceipt[]
   platformSubscriptions PlatformSubscription[]
+  subscriptionRequests   SubscriptionRequest[]
+  trialClaim             TrialClaim?
+}
+
+model SubscriptionRequest {
+  id         String                    @id @default(uuid())
+  code       String                    @unique
+  gymId      String
+  gym        Gym                       @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  plan       GymSubscriptionPlan
+  status     SubscriptionRequestStatus @default(PENDING)
+  requestedAt DateTime                 @default(now())
+  resolvedAt DateTime?
+
+  @@index([status, requestedAt])
+  @@index([gymId, requestedAt])
+}
+
+model TrialClaim {
+  id         String   @id @default(uuid())
+  gymId      String?  @unique
+  gym        Gym?     @relation(fields: [gymId], references: [id], onDelete: SetNull)
+  phone      String   @unique
+  deviceHash String   @unique
+  claimedAt  DateTime @default(now())
 }
 
 model PlatformSubscription {
@@ -86,6 +118,8 @@ model User {
   email        String   @unique
   passwordHash String
   name         String
+  phone        String?
+  tokenVersion Int      @default(0)
   role         UserRole
   gymId        String?
   gym          Gym?     @relation(fields: [gymId], references: [id])
@@ -94,8 +128,23 @@ model User {
 
   movements    PaymentMovement[]
   syncReceipts SyncReceipt[]
+  passwordResetCodes PasswordResetCode[]
 
   @@index([gymId])
+}
+
+model PasswordResetCode {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash  String
+  expiresAt DateTime
+  attempts  Int      @default(0)
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
 }
 
 model Member {

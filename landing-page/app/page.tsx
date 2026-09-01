@@ -20,9 +20,9 @@ const features = [
 ];
 
 const plans = [
-  { id:"trial", tag:"Empieza aquí", name:"Prueba gratuita", price:"0", suffix:"CUP / 7 días", copy:"Conoce GymFlow Mini con todas las funciones disponibles.", features:["Miembros y planes", "Cobros y abonos", "Avisos de vencimiento", "Sin compromiso"], cta:"Comenzar prueba gratis" },
-  { id:"monthly", tag:"Flexibilidad total", badge:"Más elegido", name:"Plan mensual", price:"5 000", suffix:"CUP / mes", copy:"Ideal para avanzar mes a mes con toda la potencia de GymFlow.", features:["Todas las funciones", "Datos siempre disponibles", "Actualizaciones incluidas", "Soporte por WhatsApp"], cta:"Solicitar plan mensual", featured:true },
-  { id:"annual", tag:"Ahorra 10 000 CUP", name:"Plan anual", price:"50 000", suffix:"CUP / año", copy:"La mejor inversión para gimnasios que piensan a largo plazo.", features:["Todo el plan mensual", "Dos meses de ahorro", "Precio fijo por un año", "Soporte por WhatsApp"], cta:"Solicitar plan anual" },
+  { id:"trial", tag:"Empieza aquí", name:"Prueba gratuita", price:"0", suffix:"CUP / 7 días", copy:"Conoce GymFlow Mini con todas las funciones disponibles.", features:["Miembros y planes", "Cobros y abonos", "Avisos de vencimiento", "Sin compromiso"], cta:"Descargar y comenzar" },
+  { id:"monthly", tag:"Flexibilidad total", badge:"Más elegido", name:"Plan mensual", price:"5 000", suffix:"CUP / mes", copy:"Ideal para avanzar mes a mes con toda la potencia de GymFlow.", features:["Todas las funciones", "Datos siempre disponibles", "Actualizaciones incluidas", "Soporte por WhatsApp"], cta:"Descargar y elegir mensual", featured:true },
+  { id:"annual", tag:"Ahorra 10 000 CUP", name:"Plan anual", price:"50 000", suffix:"CUP / año", copy:"La mejor inversión para gimnasios que piensan a largo plazo.", features:["Todo el plan mensual", "Dos meses de ahorro", "Precio fijo por un año", "Soporte por WhatsApp"], cta:"Descargar y elegir anual" },
 ];
 
 function whatsappUrl(plan?: string) {
@@ -39,7 +39,7 @@ function Brand({ compact = false }: { compact?: boolean }) {
 
 function StoreButton({ kind }: { kind:"google"|"apple" }) {
   const isGoogle = kind === "google";
-  const url = isGoogle ? process.env.NEXT_PUBLIC_GOOGLE_PLAY_URL : process.env.NEXT_PUBLIC_APP_STORE_URL;
+  const url = isGoogle ? (process.env.NEXT_PUBLIC_GOOGLE_PLAY_URL || process.env.NEXT_PUBLIC_APK_URL) : process.env.NEXT_PUBLIC_APP_STORE_URL;
   return <a className="store-button" href={url || "#descargar"} aria-label={isGoogle ? "Descargar en Google Play" : "Descargar en App Store"}>
     <Smartphone size={22}/><span><small>{isGoogle ? "DESCÁRGALA EN" : "DISPONIBLE EN"}</small><strong>{isGoogle ? "Google Play" : "App Store"}</strong></span>
   </a>;
@@ -164,6 +164,7 @@ function ShowcaseCarousel() {
 export default function Home() {
   const instagram = process.env.NEXT_PUBLIC_INSTAGRAM_URL;
   const facebook = process.env.NEXT_PUBLIC_FACEBOOK_URL;
+  const appDownloadUrl = process.env.NEXT_PUBLIC_APK_URL || process.env.NEXT_PUBLIC_GOOGLE_PLAY_URL || "#descargar";
   return <main>
     <header className="site-header"><Brand/><nav><a href="#producto">Producto</a><a href="#funciones">Funciones</a><a href="#nosotros">Nosotros</a><a href="#planes">Planes</a></nav><a className="nav-cta" href="#planes">Probar 7 días gratis <ArrowRight size={17}/></a><a className="mobile-menu" href="#planes" aria-label="Ver planes"><Menu/></a></header>
 
@@ -187,7 +188,7 @@ export default function Home() {
 
     <section className="about-download" id="nosotros"><article className="about-card"><span className="watermark">01</span><span className="square-icon"><Heart/></span><span className="eyebrow dark">QUIÉNES SOMOS</span><h2>Tecnología simple para gimnasios que quieren crecer.</h2><p>GymFlow Mini nace para convertir la gestión diaria en una tarea clara, rápida y confiable. Diseñamos desde las necesidades reales de los gimnasios cubanos.</p><span className="origin"><MapPin/>Creado en Cuba, pensado para tu comunidad.</span></article><article className="download-card" id="descargar"><span className="eyebrow">LLEVA GYMFLOW CONTIGO</span><h2>Tu operación cabe en la mano.</h2><p>Descarga la aplicación y gestiona miembros, planes y cobros desde donde estés.</p><div className="download-buttons"><StoreButton kind="google"/><StoreButton kind="apple"/></div><footer><span><small>SÍGUENOS</small><strong>Novedades y consejos</strong></span><span className="socials">{instagram ? <a href={instagram} aria-label="Instagram"><Instagram/></a> : <i><Instagram/></i>}{facebook ? <a href={facebook} aria-label="Facebook"><Facebook/></a> : <i><Facebook/></i>}</span></footer></article></section>
 
-    <section className="section pricing" id="planes"><div className="section-heading"><div><span className="eyebrow">PLANES SIMPLES Y TRANSPARENTES</span><h2>Elige el ritmo que mejor funciona para ti.</h2></div><p>Prueba toda la experiencia durante 7 días. Cuando estés listo, continúa sin perder tus datos.</p></div><div className="pricing-grid">{plans.map(plan=><article key={plan.id} className={plan.featured ? "featured" : ""}>{plan.badge&&<span className="popular">{plan.badge}</span>}<span className="plan-tag">{plan.tag}</span><h3>{plan.name}</h3><div className="price"><strong>{plan.price}</strong><small>{plan.suffix}</small></div><p>{plan.copy}</p><hr/><div className="plan-features">{plan.features.map(feature=><span key={feature}><Check/>{feature}</span>)}</div><a className="plan-cta" href={whatsappUrl(plan.name)} target="_blank" rel="noreferrer">{plan.id !== "trial" && <MessageCircle/>}{plan.cta}</a></article>)}</div></section>
+    <section className="section pricing" id="planes"><div className="section-heading"><div><span className="eyebrow">PLANES SIMPLES Y TRANSPARENTES</span><h2>Elige el ritmo que mejor funciona para ti.</h2></div><p>Descarga la app, crea tu cuenta y elige el plan dentro. Solo usamos WhatsApp para coordinar los pagos P2P.</p></div><div className="pricing-grid">{plans.map(plan=><article key={plan.id} className={plan.featured ? "featured" : ""}>{plan.badge&&<span className="popular">{plan.badge}</span>}<span className="plan-tag">{plan.tag}</span><h3>{plan.name}</h3><div className="price"><strong>{plan.price}</strong><small>{plan.suffix}</small></div><p>{plan.copy}</p><hr/><div className="plan-features">{plan.features.map(feature=><span key={feature}><Check/>{feature}</span>)}</div><a className="plan-cta" href={appDownloadUrl}><Smartphone/>{plan.cta}</a></article>)}</div></section>
 
     <footer className="site-footer"><div className="footer-top"><div className="footer-brand"><Brand/><h2>Menos papeleo.<br/>Más comunidad en movimiento.</h2><div className="footer-socials">{instagram ? <a href={instagram} aria-label="Instagram"><Instagram/></a> : <span><Instagram/></span>}{facebook ? <a href={facebook} aria-label="Facebook"><Facebook/></a> : <span><Facebook/></span>}<a href={whatsappUrl()} target="_blank" rel="noreferrer" aria-label="WhatsApp"><MessageCircle/></a></div></div><div className="footer-links"><div><strong>PRODUCTO</strong><a href="#funciones">Funciones</a><a href="#planes">Planes</a><a href="#descargar">Descargar</a><a href="#producto">Cómo funciona</a></div><div><strong>COMPAÑÍA</strong><a href="#nosotros">Quiénes somos</a><a href={whatsappUrl()} target="_blank" rel="noreferrer">Contacto</a><span>Privacidad</span><span>Términos</span></div><div><strong>HABLEMOS</strong><p>¿Quieres modernizar la gestión de tu gimnasio?</p><a className="footer-contact" href={whatsappUrl()} target="_blank" rel="noreferrer">Escríbenos por WhatsApp <ArrowRight/></a></div></div></div><div className="footer-bottom"><span>© 2026 GymFlow Mini. Todos los derechos reservados.</span><span>Diseñado para gimnasios cubanos.</span></div></footer>
 

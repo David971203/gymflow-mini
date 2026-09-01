@@ -25,9 +25,14 @@ services:
       JWT_SECRET: ${JWT_SECRET:-local-mini-secret-change-before-deploy}
       PORT: 3100
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_SECURE: ${SMTP_SECURE:-true}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
     ports:
       - "${BACKEND_PORT:-3100}:3100"
 
 volumes:
   gymflow_mini_db:
-

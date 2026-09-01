@@ -355,6 +355,7 @@ describe('MiniService', () => {
       paymentMovement:{ aggregate:jest.fn().mockResolvedValue({ _sum:{ amount:98050 } }) },
       payment:{ findMany:jest.fn().mockResolvedValue([{ amount:15000, paidAmount:2700 }]) },
       platformSubscription:{ aggregate:subscriptionAggregate },
+      subscriptionRequest:{ count:jest.fn().mockResolvedValue(2) },
     } as never);
     await expect(service.platformOverview()).resolves.toMatchObject({
       gyms:3,
@@ -366,7 +367,17 @@ describe('MiniService', () => {
       activeAnnualSubscriptions:1,
       expiredSubscriptions:0,
       withoutSubscriptions:0,
+      pendingSubscriptionRequests:2,
     });
+  });
+
+  it('no activa dos veces una solicitud P2P resuelta en concurrencia', async () => {
+    const request = { id:'request-1', gymId:'gym-1', plan:GymSubscriptionPlan.MONTHLY, status:'PENDING', gym:{ subscriptionEndsAt:null, subscriptionTrialDays:7 } };
+    const service = new MiniService({
+      subscriptionRequest:{findUnique:jest.fn().mockResolvedValue(request)},
+      $transaction:jest.fn(async (callback:(tx:unknown)=>unknown)=>callback({subscriptionRequest:{updateMany:jest.fn().mockResolvedValue({count:0})}})),
+    } as never);
+    await expect(service.resolveSubscriptionRequest('request-1','APPROVED')).rejects.toEqual(new ConflictException('Esta solicitud ya fue resuelta'));
   });
 
   it('renueva desde hoy una suscripción vencida', async () => {

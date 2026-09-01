@@ -3,35 +3,43 @@ import { UserRole } from '@prisma/client';
 import { GymSubscriptionGuard } from './guards';
 
 describe('GymSubscriptionGuard', () => {
+  const createGuard = (prisma: unknown) => new GymSubscriptionGuard(prisma as never, { getAllAndOverride: () => false } as never);
   const context = (method: string, role: UserRole = UserRole.ADMIN) => ({
+    getHandler: () => ({}),
+    getClass: () => ({}),
     switchToHttp: () => ({ getRequest: () => ({ method, user: { id:'user-1', email:'admin@gym.cu', role, gymId: role === UserRole.ADMIN ? 'gym-1' : null } }) }),
   }) as never;
 
   it('permite consultar aunque la suscripción esté vencida', async () => {
-    const findUnique = jest.fn();
-    const guard = new GymSubscriptionGuard({ gym: { findUnique } } as never);
+    const findUnique = jest.fn().mockResolvedValue({ isActive:true, subscriptionPlan:'MONTHLY', subscriptionEndsAt:new Date(Date.now()-1) });
+    const guard = createGuard({ gym: { findUnique } });
     await expect(guard.canActivate(context('GET'))).resolves.toBe(true);
-    expect(findUnique).not.toHaveBeenCalled();
+    expect(findUnique).toHaveBeenCalled();
+  });
+
+  it('bloquea incluso las consultas hasta que el nuevo gimnasio elige una oferta', async () => {
+    const guard = createGuard({ gym: { findUnique:jest.fn().mockResolvedValue({ isActive:true, subscriptionPlan:null, subscriptionEndsAt:null }) } });
+    await expect(guard.canActivate(context('GET'))).rejects.toEqual(new ForbiddenException('Elige una prueba o solicita un plan para acceder a GymFlow Mini.'));
   });
 
   it('bloquea escrituras de un gimnasio vencido con el mensaje de renovación', async () => {
-    const guard = new GymSubscriptionGuard({ gym: { findUnique: jest.fn().mockResolvedValue({ isActive:true, subscriptionEndsAt:new Date(Date.now()-1) }) } } as never);
+    const guard = createGuard({ gym: { findUnique: jest.fn().mockResolvedValue({ isActive:true, subscriptionEndsAt:new Date(Date.now()-1) }) } });
     await expect(guard.canActivate(context('POST'))).rejects.toEqual(new ForbiddenException('Para continuar debes renovar la membresía de tu gimnasio.'));
   });
 
   it('bloquea escrituras cuando el gimnasio no tiene membresía', async () => {
-    const guard = new GymSubscriptionGuard({ gym: { findUnique: jest.fn().mockResolvedValue({ isActive:true, subscriptionEndsAt:null }) } } as never);
+    const guard = createGuard({ gym: { findUnique: jest.fn().mockResolvedValue({ isActive:true, subscriptionEndsAt:null }) } });
     await expect(guard.canActivate(context('POST'))).rejects.toEqual(new ForbiddenException('Para continuar debes renovar la membresía de tu gimnasio.'));
   });
 
   it('permite escrituras mientras la suscripción está activa', async () => {
-    const guard = new GymSubscriptionGuard({ gym: { findUnique: jest.fn().mockResolvedValue({ isActive:true, subscriptionEndsAt:new Date(Date.now()+60_000) }) } } as never);
+    const guard = createGuard({ gym: { findUnique: jest.fn().mockResolvedValue({ isActive:true, subscriptionEndsAt:new Date(Date.now()+60_000) }) } });
     await expect(guard.canActivate(context('PATCH'))).resolves.toBe(true);
   });
 
   it('no restringe las operaciones del superadministrador', async () => {
     const findUnique = jest.fn();
-    const guard = new GymSubscriptionGuard({ gym: { findUnique } } as never);
+    const guard = createGuard({ gym: { findUnique } });
     await expect(guard.canActivate(context('DELETE',UserRole.SUPER_ADMIN))).resolves.toBe(true);
     expect(findUnique).not.toHaveBeenCalled();
   });

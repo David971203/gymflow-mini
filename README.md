@@ -20,6 +20,11 @@ Panel web publicado en Vercel: <https://superadmin-web-eight.vercel.app>
 
 Incluye:
 
+- Autorregistro del dueño desde Android con creación de su gimnasio y cuenta administrativa.
+- Prueba gratuita automática de 7 días, única por teléfono móvil y dispositivo Android.
+- Solicitudes de planes mensual y anual con código P2P, contacto por WhatsApp y aprobación desde el panel.
+- Recuperación de contraseña mediante código de 6 dígitos enviado por Gmail y cambio seguro desde Cuenta.
+
 - Registro y edición básica de miembros con carnet de identidad cubano (CI) obligatorio.
 - Catálogo de planes con precio y duración en días.
 - Una membresía activa y una renovación programada como máximo por miembro.
@@ -30,7 +35,7 @@ Incluye:
 - Indicadores de miembros, membresías activas, ingresos cobrados y deuda.
 - Separación estricta entre gimnasios.
 
-No incluye en esta prueba: miembros con cuenta propia, entrenadores, rutinas, clases, reservas, QR, asistencia, notificaciones ni personal adicional.
+No incluye en esta prueba: miembros con cuenta propia, entrenadores, rutinas, clases, reservas, QR, asistencia ni personal adicional.
 
 ## Roles
 
@@ -55,7 +60,7 @@ Gym 1--N SyncReceipt N--1 User(ADMIN)
 
 ## Motor offline de Android
 
-La app Android es **local-first**. Después de un primer login con conexión, el administrador puede consultar y modificar miembros, planes, membresías y cobros sin Internet. La sesión se conserva cifrada con SecureStore durante un máximo de 14 días desde la última validación online; una vez vencida exige conexión para autenticar de nuevo.
+La app Android es **local-first**. Después de un primer login con conexión, el administrador puede consultar y modificar miembros, planes, membresías y cobros sin Internet durante un máximo de **72 horas desde la última validación online**. Al vencer ese plazo se bloquean las acciones hasta recuperar conexión y verificar la membresía. La sesión cifrada puede conservarse en SecureStore hasta 14 días para recuperar la cuenta y sus datos locales, pero ese plazo no amplía el permiso de operar offline.
 
 ### Flujo de datos
 
@@ -150,6 +155,8 @@ No ejecutes `prisma migrate dev` ni el seed automáticamente en cada build de pr
 Configura `backend` como **Root Directory** y deja que Railway use su `Dockerfile`. La imagen copia `prisma/` antes de `npm ci`, porque el `postinstall` necesita el esquema para generar Prisma Client. Al arrancar, el contenedor ejecuta `prisma migrate deploy` antes de iniciar NestJS.
 
 Variables requeridas: `DATABASE_URL`, `JWT_SECRET` y `CORS_ORIGIN`. Railway proporciona `PORT` automáticamente; NestJS ya escucha ese valor en `0.0.0.0`.
+
+Para la recuperación de contraseñas configura además `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=465`, `SMTP_SECURE=true`, `SMTP_USER`, `SMTP_PASSWORD` y `SMTP_FROM`. `SMTP_PASSWORD` debe ser una contraseña de aplicación de Google, no la contraseña normal del correo.
 
 Si PostgreSQL está en Supabase, no uses en Railway la conexión directa
 `db.<project-ref>.supabase.co:5432`: normalmente solo publica IPv6. En el panel de

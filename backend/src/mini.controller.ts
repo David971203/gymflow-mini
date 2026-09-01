@@ -3,7 +3,7 @@ import { ApiTags } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import { CurrentUser, Roles, type AuthUser } from './common';
 import { MiniService } from './mini.service';
-import { ApplyPaymentDto, AssignGymMembershipDto, CreateGymAdminDto, CreateGymDto, CreateMemberDto, CreateMembershipDto, CreatePlanDto, RenewMembershipDto, UpdateGymAdminDto, UpdateGymDto, UpdateGymMembershipDto, UpdateGymStatusDto, UpdateGymSubscriptionDto, UpdateMemberDto, UpdatePlanDto } from './mini.dto';
+import { ApplyPaymentDto, AssignGymMembershipDto, CreateGymAdminDto, CreateGymDto, CreateMemberDto, CreateMembershipDto, CreatePlanDto, RenewMembershipDto, ResolveSubscriptionRequestDto, UpdateGymAdminDto, UpdateGymDto, UpdateGymMembershipDto, UpdateGymStatusDto, UpdateGymSubscriptionDto, UpdateMemberDto, UpdatePlanDto } from './mini.dto';
 
 @ApiTags('super-admin')
 @Controller('platform')
@@ -12,6 +12,8 @@ export class PlatformController {
   constructor(private readonly mini: MiniService) {}
   @Get('overview') overview() { return this.mini.platformOverview(); }
   @Get('subscriptions') subscriptions() { return this.mini.listPlatformSubscriptions(); }
+  @Get('subscription-requests') subscriptionRequests() { return this.mini.listSubscriptionRequests(); }
+  @Patch('subscription-requests/:id') resolveSubscriptionRequest(@Param('id') id: string, @Body() dto: ResolveSubscriptionRequestDto) { return this.mini.resolveSubscriptionRequest(id, dto.status); }
   @Get('gyms') gyms() { return this.mini.listGyms(); }
   @Post('gyms') createGym(@Body() dto: CreateGymDto) { return this.mini.createGym(dto); }
   @Get('gyms/:id') gym(@Param('id') id: string) { return this.mini.getGym(id); }

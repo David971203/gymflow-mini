@@ -1,4 +1,4 @@
-import { GymSubscriptionPlan, MembershipStatus, PaymentMethod } from '@prisma/client';
+import { GymSubscriptionPlan, MembershipStatus, PaymentMethod, SubscriptionRequestStatus } from '@prisma/client';
 import { Type } from 'class-transformer';
 import { IsArray, IsBoolean, IsDateString, IsEmail, IsEnum, IsIn, IsInt, IsNumber, IsObject, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, MinLength, ArrayMaxSize, ArrayMinSize, ValidateNested } from 'class-validator';
 
@@ -19,6 +19,11 @@ export class UpdateGymStatusDto { @IsBoolean() isActive: boolean; }
 export class UpdateGymSubscriptionDto {
   @IsEnum(GymSubscriptionPlan) subscriptionPlan: GymSubscriptionPlan;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(365) subscriptionTrialDays?: number;
+}
+
+export class ResolveSubscriptionRequestDto {
+  @IsIn([SubscriptionRequestStatus.APPROVED, SubscriptionRequestStatus.REJECTED])
+  status: 'APPROVED' | 'REJECTED';
 }
 
 export class UpdateGymDto {

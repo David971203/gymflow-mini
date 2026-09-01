@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { GymSubscriptionPlan, MembershipStatus, PaymentStatus, Prisma, UserRole } from '@prisma/client';
+import { GymSubscriptionPlan, MembershipStatus, PaymentStatus, Prisma, SubscriptionRequestStatus, UserRole } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { PrismaService } from './prisma.service';
 import type { AuthUser } from './common';
@@ -59,6 +59,31 @@ export class MiniService {
     return this.prisma.platformSubscription.findMany({
       include: { gym: { select: { id: true, name: true, slug: true } } },
       orderBy: { activatedAt: 'desc' },
+    });
+  }
+
+  listSubscriptionRequests() {
+    return this.prisma.subscriptionRequest.findMany({
+      include: { gym: { select: { id: true, name: true, phone: true, province: true, users: { where: { role: UserRole.ADMIN }, select: { id: true, name: true, email: true, phone: true }, take: 1 } } } },
+      orderBy: [{ status: 'asc' }, { requestedAt: 'desc' }],
+    });
+  }
+
+  async resolveSubscriptionRequest(id: string, status: 'APPROVED' | 'REJECTED') {
+    const request = await this.prisma.subscriptionRequest.findUnique({ where: { id }, include: { gym: true } });
+    if (!request) throw new NotFoundException('Solicitud no encontrada');
+    if (request.status !== SubscriptionRequestStatus.PENDING) throw new ConflictException('Esta solicitud ya fue resuelta');
+    const now = new Date();
+    if (request.plan === GymSubscriptionPlan.TRIAL) throw new ConflictException('Las pruebas gratuitas se activan automáticamente');
+    const startedAt = request.gym.subscriptionEndsAt && request.gym.subscriptionEndsAt > now ? request.gym.subscriptionEndsAt : now;
+    const endsAt = this.subscriptionEnd(startedAt, request.plan, request.gym.subscriptionTrialDays);
+    return this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.subscriptionRequest.updateMany({ where: { id, status: SubscriptionRequestStatus.PENDING }, data: { status, resolvedAt: now } });
+      if (claimed.count !== 1) throw new ConflictException('Esta solicitud ya fue resuelta');
+      if (status === SubscriptionRequestStatus.REJECTED) return tx.subscriptionRequest.findUniqueOrThrow({ where: { id }, include: { gym: true } });
+      await tx.gym.update({ where: { id: request.gymId }, data: { subscriptionPlan: request.plan, subscriptionStartedAt: startedAt, subscriptionEndsAt: endsAt } });
+      await tx.platformSubscription.create({ data: { gymId: request.gymId, plan: request.plan, amount: PLATFORM_SUBSCRIPTION_PRICES[request.plan], startedAt, endsAt } });
+      return tx.subscriptionRequest.findUniqueOrThrow({ where: { id }, include: { gym: true } });
     });
   }
 
@@ -382,7 +407,7 @@ export class MiniService {
       return { monthStart, monthEnd };
     });
     const activeSubscriptionWhere = { isActive: true, subscriptionEndsAt: { gt: now } } satisfies Prisma.GymWhereInput;
-    const [gyms, activeGyms, members, newMembers, revenue, debtRows, subscriptionMonthlyRevenue, subscriptionTotalRevenue, activeTrialSubscriptions, activeMonthlySubscriptions, activeAnnualSubscriptions, expiredSubscriptions, withoutSubscriptions, ...memberTrendCounts] = await Promise.all([
+    const [gyms, activeGyms, members, newMembers, revenue, debtRows, subscriptionMonthlyRevenue, subscriptionTotalRevenue, activeTrialSubscriptions, activeMonthlySubscriptions, activeAnnualSubscriptions, expiredSubscriptions, withoutSubscriptions, pendingSubscriptionRequests, ...memberTrendCounts] = await Promise.all([
       this.prisma.gym.count(),
       this.prisma.gym.count({ where: { isActive: true } }),
       this.prisma.member.count({ where: { status: 'ACTIVE' } }),
@@ -396,6 +421,7 @@ export class MiniService {
       this.prisma.gym.count({ where: { ...activeSubscriptionWhere, subscriptionPlan: GymSubscriptionPlan.ANNUAL } }),
       this.prisma.gym.count({ where: { subscriptionEndsAt: { lte: now } } }),
       this.prisma.gym.count({ where: { subscriptionPlan: null } }),
+      this.prisma.subscriptionRequest.count({ where: { status: SubscriptionRequestStatus.PENDING } }),
       ...trendMonths.map(({ monthStart, monthEnd }) => this.prisma.member.count({ where: { joinedAt: { gte: monthStart, lt: monthEnd } } })),
     ]);
     const debt = debtRows.reduce((sum, row) => sum + Number(row.amount) - Number(row.paidAmount), 0);
@@ -412,6 +438,7 @@ export class MiniService {
       activeAnnualSubscriptions,
       expiredSubscriptions,
       withoutSubscriptions,
+      pendingSubscriptionRequests,
     };
   }
 

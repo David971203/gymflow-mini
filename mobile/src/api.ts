@@ -1,9 +1,11 @@
 import * as SecureStore from 'expo-secure-store';
+import * as Application from 'expo-application';
 import type { Dashboard, Member, Payment, Plan, SyncOperation, SyncResult, SyncSnapshot, User } from './types';
 
 const BASE_URL = `${process.env.EXPO_PUBLIC_API_URL ?? 'http://10.0.2.2:3100'}/api`;
 const TOKEN_KEY = 'gymflow_mini_token';
 const SESSION_KEY = 'gymflow_mini_offline_session';
+const DEVICE_KEY = 'gymflow_mini_installation_id';
 const OFFLINE_SESSION_MS = 14 * 24 * 60 * 60 * 1000;
 
 export class ApiError extends Error {
@@ -21,14 +23,45 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return data as T;
 }
 
+async function deviceId() {
+  if (Application.getAndroidId) {
+    const androidId = Application.getAndroidId();
+    if (androidId) return `android:${androidId}`;
+  }
+  const existing = await SecureStore.getItemAsync(DEVICE_KEY);
+  if (existing) return existing;
+  const generated = `install:${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}:${Math.random().toString(36).slice(2)}`;
+  await SecureStore.setItemAsync(DEVICE_KEY, generated);
+  return generated;
+}
+
+async function persistSession(result: { accessToken?: string; user: User }) {
+  if (result.accessToken) await SecureStore.setItemAsync(TOKEN_KEY, result.accessToken);
+  await SecureStore.setItemAsync(SESSION_KEY, JSON.stringify({ user: result.user, lastOnlineAt: Date.now() }));
+  return result.user;
+}
+
 export const api = {
   login: async (email: string, password: string) => {
     const result = await request<{ accessToken: string; user: User }>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
     if (result.user.role !== 'ADMIN') throw new Error('Esta aplicación es exclusiva para administradores de gimnasio');
-    await SecureStore.setItemAsync(TOKEN_KEY, result.accessToken);
-    await SecureStore.setItemAsync(SESSION_KEY, JSON.stringify({ user: result.user, lastOnlineAt: Date.now() }));
-    return result.user;
+    return persistSession(result);
   },
+  forgotPassword: (email: string) => request<{ message: string }>('/auth/password/forgot', { method: 'POST', body: JSON.stringify({ email }) }),
+  resetPassword: (input: { email: string; code: string; newPassword: string }) => request<{ message: string }>('/auth/password/reset', { method: 'POST', body: JSON.stringify(input) }),
+  changePassword: async (input: { currentPassword: string; newPassword: string }) => {
+    const result = await request<{ accessToken: string; user: User }>('/auth/password/change', { method: 'POST', body: JSON.stringify(input) });
+    return persistSession(result);
+  },
+  register: async (input: { ownerName: string; gymName: string; province?: string; phone: string; email: string; password: string }) => {
+    const result = await request<{ accessToken: string; user: User }>('/auth/register', { method: 'POST', body: JSON.stringify({ ...input, deviceId: await deviceId() }) });
+    return persistSession(result);
+  },
+  selectSubscription: async (plan: 'TRIAL' | 'MONTHLY' | 'ANNUAL') => {
+    const result = await request<{ user: User }>('/auth/subscription', { method: 'POST', body: JSON.stringify({ plan, deviceId: await deviceId() }) });
+    return persistSession(result);
+  },
+  refreshProfile: async () => persistSession({ user: await request<User>('/auth/me') }),
   restore: async () => {
     const cachedRaw = await SecureStore.getItemAsync(SESSION_KEY);
     const cached = cachedRaw ? JSON.parse(cachedRaw) as { user: User; lastOnlineAt: number } : null;

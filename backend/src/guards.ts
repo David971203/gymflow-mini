@@ -2,7 +2,7 @@ import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@
 import { Reflector } from '@nestjs/core';
 import { AuthGuard } from '@nestjs/passport';
 import { UserRole } from '@prisma/client';
-import { IS_PUBLIC, ROLES, type AuthUser } from './common';
+import { ALLOW_WITHOUT_SUBSCRIPTION, IS_PUBLIC, ROLES, type AuthUser } from './common';
 import { PrismaService } from './prisma.service';
 
 @Injectable()
@@ -28,12 +28,15 @@ export class RolesGuard implements CanActivate {
 
 @Injectable()
 export class GymSubscriptionGuard implements CanActivate {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly reflector: Reflector) {}
   async canActivate(context: ExecutionContext) {
+    if (this.reflector.getAllAndOverride<boolean>(ALLOW_WITHOUT_SUBSCRIPTION, [context.getHandler(), context.getClass()])) return true;
     const request = context.switchToHttp().getRequest<{ method: string; user?: AuthUser }>();
-    if (!request.user || request.user.role !== UserRole.ADMIN || ['GET','HEAD','OPTIONS'].includes(request.method)) return true;
+    if (!request.user || request.user.role !== UserRole.ADMIN) return true;
     if (!request.user.gymId) throw new ForbiddenException('Para continuar debes renovar la membresía de tu gimnasio.');
-    const gym = await this.prisma.gym.findUnique({ where: { id: request.user.gymId }, select: { isActive: true, subscriptionEndsAt: true } });
+    const gym = await this.prisma.gym.findUnique({ where: { id: request.user.gymId }, select: { isActive: true, subscriptionPlan: true, subscriptionEndsAt: true } });
+    if (gym?.subscriptionPlan === null) throw new ForbiddenException('Elige una prueba o solicita un plan para acceder a GymFlow Mini.');
+    if (['GET','HEAD','OPTIONS'].includes(request.method)) return true;
     if (!gym?.isActive || !gym.subscriptionEndsAt || gym.subscriptionEndsAt.getTime() <= Date.now()) throw new ForbiddenException('Para continuar debes renovar la membresía de tu gimnasio.');
     return true;
   }

@@ -10,6 +10,7 @@ import { JwtStrategy } from './jwt.strategy';
 import { AdminController, PlatformController } from './mini.controller';
 import { MiniService } from './mini.service';
 import { MembershipExpirationService } from './membership-expiration.service';
+import { MailService } from './mail.service';
 import { PrismaService } from './prisma.service';
 import { SyncController } from './sync.controller';
 import { SyncService } from './sync.service';
@@ -21,6 +22,6 @@ import { SyncService } from './sync.service';
     JwtModule.registerAsync({ inject: [ConfigService], useFactory: (config: ConfigService) => ({ secret: config.getOrThrow('JWT_SECRET'), signOptions: { expiresIn: '12h' } }) }),
   ],
   controllers: [AuthController, PlatformController, AdminController, SyncController],
-  providers: [PrismaService, AuthService, MiniService, MembershipExpirationService, SyncService, JwtStrategy, { provide: APP_GUARD, useClass: JwtGuard }, { provide: APP_GUARD, useClass: RolesGuard }, { provide: APP_GUARD, useClass: GymSubscriptionGuard }],
+  providers: [PrismaService, AuthService, MailService, MiniService, MembershipExpirationService, SyncService, JwtStrategy, { provide: APP_GUARD, useClass: JwtGuard }, { provide: APP_GUARD, useClass: RolesGuard }, { provide: APP_GUARD, useClass: GymSubscriptionGuard }],
 })
 export class AppModule {}

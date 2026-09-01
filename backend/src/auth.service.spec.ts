@@ -20,9 +20,22 @@ describe('AuthService self-service security', () => {
 
     await expect(service.selectSubscription(authUser,{plan:GymSubscriptionPlan.MONTHLY,deviceId:'android:1234567890abcdef'})).resolves.toMatchObject({
       request:{ code:'GF-ABC123', plan:GymSubscriptionPlan.MONTHLY },
-      user:{ subscriptionRequest:{ code:'GF-ABC123' } },
+      user:{ subscriptionRequest:{ code:'GF-ABC123' }, latestSubscriptionRequest:{ code:'GF-ABC123' } },
     });
     expect(create).toHaveBeenCalledWith({data:expect.objectContaining({gymId:'gym-1',plan:GymSubscriptionPlan.MONTHLY})});
+  });
+
+  it('informa una solicitud rechazada sin mantenerla como pendiente', async () => {
+    const rejected = { id:'request-1', code:'GF-ABC123', gymId:'gym-1', plan:GymSubscriptionPlan.MONTHLY, status:'REJECTED', requestedAt:new Date(), resolvedAt:new Date() };
+    const prisma = {
+      user:{findUnique:jest.fn().mockResolvedValue({id:'user-1',email:'owner@gym.cu',phone:'51234567',name:'Ana',role:UserRole.ADMIN,gymId:'gym-1',isActive:true,gym:{id:'gym-1',name:'Gym Ana',subscriptionRequests:[rejected]}})},
+    };
+    const service = new AuthService(prisma as never,{signAsync:jest.fn()} as never,{sendPasswordResetCode:jest.fn()} as never);
+
+    await expect(service.me(authUser)).resolves.toMatchObject({
+      subscriptionRequest:null,
+      latestSubscriptionRequest:{code:'GF-ABC123',status:'REJECTED'},
+    });
   });
 
   it('rechaza la prueba cuando el teléfono o dispositivo ya fue utilizado', async () => {

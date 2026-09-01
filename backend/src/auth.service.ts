@@ -41,11 +41,13 @@ export class AuthService {
   private async profile(userId: string) {
     const found = await this.prisma.user.findUnique({
       where: { id: userId },
-      include: { gym: { include: { subscriptionRequests: { where: { status: SubscriptionRequestStatus.PENDING }, orderBy: { requestedAt: 'desc' }, take: 1 } } } },
+      include: { gym: { include: { subscriptionRequests: { orderBy: { requestedAt: 'desc' }, take: 1 } } } },
     });
     if (!found || !found.isActive) throw new UnauthorizedException();
     const gym = found.gym ? (() => { const { subscriptionRequests, ...data } = found.gym; return data; })() : null;
-    return { id: found.id, email: found.email, phone: found.phone, name: found.name, role: found.role, gymId: found.gymId, gym, subscriptionRequest: found.gym?.subscriptionRequests[0] ?? null };
+    const latestSubscriptionRequest = found.gym?.subscriptionRequests[0] ?? null;
+    const subscriptionRequest = latestSubscriptionRequest?.status === SubscriptionRequestStatus.PENDING ? latestSubscriptionRequest : null;
+    return { id: found.id, email: found.email, phone: found.phone, name: found.name, role: found.role, gymId: found.gymId, gym, subscriptionRequest, latestSubscriptionRequest };
   }
 
   private async session(userId: string) {

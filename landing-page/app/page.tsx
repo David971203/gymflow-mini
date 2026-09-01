@@ -40,7 +40,7 @@ function Brand({ compact = false }: { compact?: boolean }) {
 function StoreButton({ kind }: { kind:"google"|"apple" }) {
   const isGoogle = kind === "google";
   const url = isGoogle ? (process.env.NEXT_PUBLIC_GOOGLE_PLAY_URL || process.env.NEXT_PUBLIC_APK_URL) : process.env.NEXT_PUBLIC_APP_STORE_URL;
-  return <a className="store-button" href={url || "#descargar"} aria-label={isGoogle ? "Descargar en Google Play" : "Descargar en App Store"}>
+  return <a className="store-button" href={url || "https://expo.dev/artifacts/eas/Hcbxq7cMlrXoH8Gx-w-q1YYbbx_QaN9tXRwZYyxNUcA.apk"} aria-label={isGoogle ? "Descargar en Google Play" : "Descargar en App Store"}>
     <Smartphone size={22}/><span><small>{isGoogle ? "PROXIMAMENTE EN" : "PROXIMAMENTE EN"}</small><strong>{isGoogle ? "Google Play" : "App Store"}</strong></span>
   </a>;
 }

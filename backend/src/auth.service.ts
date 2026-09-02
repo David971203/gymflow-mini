@@ -4,8 +4,9 @@ import { GymSubscriptionPlan, Prisma, SubscriptionRequestStatus, UserRole } from
 import * as argon2 from 'argon2';
 import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'crypto';
 import { PrismaService } from './prisma.service';
-import { ChangePasswordDto, ForgotPasswordDto, LoginDto, RegisterDto, ResetPasswordDto, SelectSubscriptionDto } from './auth.dto';
+import { ChangePasswordDto, ForgotPasswordDto, GoogleLoginDto, LoginDto, RegisterDto, ResetPasswordDto, SelectSubscriptionDto } from './auth.dto';
 import type { AuthUser } from './common';
+import { GoogleIdentityService } from './google-identity.service';
 import { MailService } from './mail.service';
 
 const PLATFORM_SUBSCRIPTION_PRICES: Record<GymSubscriptionPlan, number> = {
@@ -16,7 +17,7 @@ const PLATFORM_SUBSCRIPTION_PRICES: Record<GymSubscriptionPlan, number> = {
 
 @Injectable()
 export class AuthService {
-  constructor(private readonly prisma: PrismaService, private readonly jwt: JwtService, private readonly mail: MailService) {}
+  constructor(private readonly prisma: PrismaService, private readonly jwt: JwtService, private readonly mail: MailService, private readonly googleIdentity?: GoogleIdentityService) {}
 
   private normalizePhone(value: string) {
     let phone = value.replace(/\D/g, '');
@@ -64,6 +65,16 @@ export class AuthService {
     if (user.role === 'ADMIN' && (!user.gym || !user.gym.isActive)) {
       throw new UnauthorizedException('El gimnasio está inactivo');
     }
+    return this.session(user.id);
+  }
+
+  async googleLogin(dto: GoogleLoginDto) {
+    if (!this.googleIdentity) throw new UnauthorizedException('El acceso con Google no está disponible');
+    const email = await this.googleIdentity.verifiedEmail(dto.idToken);
+    const user = await this.prisma.user.findUnique({ where: { email }, include: { gym: true } });
+    if (!user) throw new UnauthorizedException('No existe una cuenta de GymFlow con este correo. Crea tu cuenta primero');
+    if (!user.isActive || user.role !== UserRole.ADMIN) throw new UnauthorizedException('Esta cuenta no puede acceder a la aplicación de administradores');
+    if (!user.gym || !user.gym.isActive) throw new UnauthorizedException('El gimnasio está inactivo');
     return this.session(user.id);
   }
 

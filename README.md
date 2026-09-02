@@ -204,6 +204,18 @@ En el emulador Android, el valor por defecto `http://10.0.2.2:3100` alcanza la c
 
 Para generar un APK instalable mediante EAS: `npx eas build --platform android --profile preview`. El perfil ya está definido en `mobile/eas.json`.
 
+#### Acceso con Google
+
+El botón **Continuar con Google** sirve únicamente para entrar a una cuenta de administrador ya creada. Nunca registra usuarios ni crea gimnasios. Para habilitarlo:
+
+1. En Google Cloud configura la pantalla de consentimiento OAuth.
+2. Crea un cliente OAuth de tipo **Aplicación web**. Guarda su ID como `GOOGLE_AUTH_CLIENT_ID` en el backend y como `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` en la aplicación; ambos valores deben ser idénticos.
+3. Crea un cliente OAuth de tipo **Android** para el paquete `com.gymflow.mini.admin` y registra las huellas SHA-1 de cada certificado usado para firmar la app (desarrollo, EAS y posteriormente Google Play).
+4. Crea un cliente OAuth de tipo **iOS** para el bundle `com.gymflow.mini.admin` y guarda su ID como `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`. `app.config.js` genera automáticamente el URL scheme requerido por iOS.
+5. Configura las tres variables tanto en desarrollo como en producción y genera una compilación nueva. El inicio con Google utiliza código nativo y no funciona en Expo Go.
+
+Los ID de cliente OAuth son configuración pública, no secretos. El backend valida el token de Google, su firma, audiencia, vencimiento y correo confirmado. Solo se admiten direcciones Gmail o Google Workspace, porque en esos casos Google controla autoritativamente el correo.
+
 La versión iOS usa el bundle `com.gymflow.mini.admin`. Perfiles disponibles:
 
 ```bash

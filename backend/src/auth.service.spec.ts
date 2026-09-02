@@ -1,9 +1,31 @@
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { GymSubscriptionPlan, Prisma, UserRole } from '@prisma/client';
 import { AuthService } from './auth.service';
 
 describe('AuthService self-service security', () => {
   const authUser = { id:'user-1', email:'owner@gym.cu', role:UserRole.ADMIN, gymId:'gym-1' };
+
+  it('inicia sesión con Google solamente si el administrador ya existe', async () => {
+    const existing = { id:'user-1',email:'owner@gmail.com',isActive:true,role:UserRole.ADMIN,gym:{isActive:true} };
+    const prisma = { user:{findUnique:jest.fn().mockResolvedValue(existing)} };
+    const googleIdentity = { verifiedEmail:jest.fn().mockResolvedValue('owner@gmail.com') };
+    const service = new AuthService(prisma as never,{signAsync:jest.fn()} as never,{sendPasswordResetCode:jest.fn()} as never,googleIdentity as never);
+    jest.spyOn(service as never,'session').mockResolvedValue({accessToken:'jwt',user:existing} as never);
+
+    await expect(service.googleLogin({idToken:'token-valido'.repeat(12)})).resolves.toMatchObject({accessToken:'jwt'});
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({where:{email:'owner@gmail.com'},include:{gym:true}});
+  });
+
+  it('no crea una cuenta cuando el correo autenticado con Google no existe', async () => {
+    const prisma = { user:{findUnique:jest.fn().mockResolvedValue(null)} };
+    const googleIdentity = { verifiedEmail:jest.fn().mockResolvedValue('nuevo@gmail.com') };
+    const service = new AuthService(prisma as never,{signAsync:jest.fn()} as never,{sendPasswordResetCode:jest.fn()} as never,googleIdentity as never);
+
+    await expect(service.googleLogin({idToken:'token-valido'.repeat(12)})).rejects.toEqual(
+      new UnauthorizedException('No existe una cuenta de GymFlow con este correo. Crea tu cuenta primero'),
+    );
+    expect(Object.keys(prisma)).toEqual(['user']);
+  });
 
   it('crea una solicitud P2P con código y la devuelve en el perfil', async () => {
     const request = { id:'request-1', code:'GF-ABC123', gymId:'gym-1', plan:GymSubscriptionPlan.MONTHLY, status:'PENDING', requestedAt:new Date(), resolvedAt:null };

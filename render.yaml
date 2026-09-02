@@ -20,6 +20,8 @@ services:
         generateValue: true
       - key: CORS_ORIGIN
         value: "*"
+      - key: GOOGLE_AUTH_CLIENT_ID
+        sync: false
       - key: SEED_DATABASE
         value: "true"
 

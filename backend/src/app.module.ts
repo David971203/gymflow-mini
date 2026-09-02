@@ -8,6 +8,7 @@ import { AuthService } from './auth.service';
 import { AttendanceController } from './attendance.controller';
 import { AttendanceService } from './attendance.service';
 import { GymSubscriptionGuard, JwtGuard, RolesGuard } from './guards';
+import { GoogleIdentityService } from './google-identity.service';
 import { HealthController } from './health.controller';
 import { JwtStrategy } from './jwt.strategy';
 import { AdminController, PlatformController } from './mini.controller';
@@ -25,6 +26,6 @@ import { SyncService } from './sync.service';
     JwtModule.registerAsync({ inject: [ConfigService], useFactory: (config: ConfigService) => ({ secret: config.getOrThrow('JWT_SECRET'), signOptions: { expiresIn: '12h' } }) }),
   ],
   controllers: [HealthController, AuthController, PlatformController, AdminController, AttendanceController, SyncController],
-  providers: [PrismaService, AuthService, MailService, MiniService, AttendanceService, MembershipExpirationService, SyncService, JwtStrategy, { provide: APP_GUARD, useClass: JwtGuard }, { provide: APP_GUARD, useClass: RolesGuard }, { provide: APP_GUARD, useClass: GymSubscriptionGuard }],
+  providers: [PrismaService, AuthService, GoogleIdentityService, MailService, MiniService, AttendanceService, MembershipExpirationService, SyncService, JwtStrategy, { provide: APP_GUARD, useClass: JwtGuard }, { provide: APP_GUARD, useClass: RolesGuard }, { provide: APP_GUARD, useClass: GymSubscriptionGuard }],
 })
 export class AppModule {}

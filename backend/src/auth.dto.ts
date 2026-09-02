@@ -6,6 +6,10 @@ export class LoginDto {
   @IsString() @MinLength(8) password: string;
 }
 
+export class GoogleLoginDto {
+  @IsString() @MinLength(100) @MaxLength(4096) idToken: string;
+}
+
 export class RegisterDto {
   @IsString() @MaxLength(100) ownerName: string;
   @IsString() @MaxLength(100) gymName: string;

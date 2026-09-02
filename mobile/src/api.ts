@@ -53,6 +53,11 @@ export const api = {
     if (result.user.role !== 'ADMIN') throw new Error('Esta aplicación es exclusiva para administradores de gimnasio');
     return persistSession(result);
   },
+  googleLogin: async (idToken: string) => {
+    const result = await request<{ accessToken: string; user: User }>('/auth/google', { method: 'POST', body: JSON.stringify({ idToken }) });
+    if (result.user.role !== 'ADMIN') throw new Error('Esta aplicación es exclusiva para administradores de gimnasio');
+    return persistSession(result);
+  },
   forgotPassword: (email: string) => request<{ message: string }>('/auth/password/forgot', { method: 'POST', body: JSON.stringify({ email }) }),
   resetPassword: (input: { email: string; code: string; newPassword: string }) => request<{ message: string }>('/auth/password/reset', { method: 'POST', body: JSON.stringify(input) }),
   changePassword: async (input: { currentPassword: string; newPassword: string }) => {

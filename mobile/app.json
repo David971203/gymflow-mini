@@ -62,7 +62,8 @@
           "color": "#173F31",
           "defaultChannel": "membership-expirations"
         }
-      ]
+      ],
+      "@react-native-google-signin/google-signin"
     ],
     "extra": {
       "eas": {

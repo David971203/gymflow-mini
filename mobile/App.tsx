@@ -8,6 +8,7 @@ import * as SecureStore from 'expo-secure-store';
 import { Directory, File, Paths } from 'expo-file-system';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import writeExcelFile, { type SheetData } from 'write-excel-file/universal';
 import { api } from './src/api';
@@ -23,6 +24,8 @@ let activeSubscriptionEndsAt = '';
 let activeSubscriptionScope = '';
 let activeSubscriptionTrialDays = 7;
 const renewalMessage = 'Para continuar debes renovar la membresía de tu gimnasio.';
+const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID?.trim() ?? '';
+const googleIosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID?.trim() ?? '';
 const configuredRenewalWhatsApp = (process.env.EXPO_PUBLIC_RENEWAL_WHATSAPP ?? '').replace(/\D/g,'');
 const renewalWhatsApp = configuredRenewalWhatsApp.length === 8 ? `53${configuredRenewalWhatsApp}` : configuredRenewalWhatsApp;
 const money = (value: number | string) => `${Number(value).toLocaleString('es-CU', { maximumFractionDigits: 2 })} ${activeCurrency}`;
@@ -293,6 +296,7 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
   const [password, setPassword] = useState('');
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const loginCardY = useRef(0);
   const revealFocusedInput = useRevealFocusedInput(scrollRef, 24);
@@ -309,11 +313,29 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
     const hideSubscription = Keyboard.addListener('keyboardDidHide', () => scrollRef.current?.scrollTo({ y: 0, animated: true }));
     return () => { showSubscription.remove(); hideSubscription.remove(); };
   }, [scrollLoginFormAboveKeyboard]);
+  useEffect(() => {
+    if (googleWebClientId) GoogleSignin.configure({ webClientId:googleWebClientId, ...(googleIosClientId ? { iosClientId:googleIosClientId } : {}), offlineAccess:false });
+  }, []);
   const submit = async () => {
     setLoading(true);
     try { onLogin(await api.login(email.trim(), password)); }
     catch (error) { showError(error); }
     finally { setLoading(false); }
+  };
+  const loginWithGoogle = async () => {
+    if (!googleWebClientId) { showError(new Error('El acceso con Google todavía no está configurado')); return; }
+    setGoogleLoading(true);
+    try {
+      if (Platform.OS === 'android') await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog:true });
+      const result = await GoogleSignin.signIn();
+      if (result.type !== 'success') return;
+      if (!result.data.idToken) throw new Error('Google no devolvió una credencial válida');
+      onLogin(await api.googleLogin(result.data.idToken));
+    } catch (error) {
+      showError(error);
+    } finally {
+      setGoogleLoading(false);
+    }
   };
   if (creatingAccount) return <Register onRegistered={onLogin} onBack={() => setCreatingAccount(false)}/>;
   if (recoveringPassword) return <PasswordRecovery onBack={() => setRecoveringPassword(false)}/>;
@@ -330,6 +352,8 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
           <PasswordField value={password} onChangeText={setPassword} visible={passwordVisible} onToggleVisibility={() => setPasswordVisible(value => !value)} onSubmit={() => void submit()} />
           <Pressable accessibilityRole="button" onPress={() => setRecoveringPassword(true)} style={styles.forgotPasswordButton}><Text style={styles.forgotPasswordText}>¿Olvidaste tu contraseña?</Text></Pressable>
           <PrimaryButton label={loading ? 'Entrando…' : 'Entrar'} onPress={submit} disabled={loading || !email.trim() || !password} />
+          <View style={styles.loginDivider}><View style={styles.loginDividerLine}/><Text style={styles.loginDividerText}>o</Text><View style={styles.loginDividerLine}/></View>
+          <Pressable accessibilityRole="button" accessibilityLabel="Continuar con Google" accessibilityState={{disabled:loading||googleLoading}} disabled={loading||googleLoading} onPress={()=>void loginWithGoogle()} style={({pressed})=>[styles.googleLoginButton,(loading||googleLoading)&&styles.disabled,pressed&&styles.tabPressed]}>{googleLoading?<ActivityIndicator color="#173f31"/>:<Ionicons name="logo-google" size={20} color="#4285F4"/>}<Text style={styles.googleLoginText}>{googleLoading?'Conectando…':'Continuar con Google'}</Text></Pressable>
         </View>
         <View style={styles.loginJoin}>
           <Text style={styles.loginJoinText}>¿Eres dueño de un Gimnasio y no tienes una cuenta?</Text>
@@ -1121,7 +1145,7 @@ function withReadableType<T extends StyleSheet.NamedStyles<T>>(source: T): T {
 const baseStyles = StyleSheet.create(withReadableType({
   center:{flex:1,alignItems:'center',justifyContent:'center',backgroundColor:palette.brand},app:{flex:1,backgroundColor:palette.background},content:{flex:1},minTouch:{minHeight:44},
   errorToastLayer:{...StyleSheet.absoluteFillObject,zIndex:1000,elevation:30},errorToast:{position:'absolute',top:Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) + 10 : 54,left:14,right:14,minHeight:72,padding:13,flexDirection:'row',alignItems:'flex-start',gap:10,borderWidth:1,borderColor:'#f8b4ad',borderRadius:15,backgroundColor:'#b42318',shadowColor:'#7a1710',shadowOffset:{width:0,height:6},shadowOpacity:.3,shadowRadius:12,elevation:24},successToast:{borderColor:'#7cc89f',backgroundColor:'#167247',shadowColor:'#0b4a2d'},warningToast:{borderColor:'#f3c26b',backgroundColor:'#a86108',shadowColor:'#6f3c03'},errorToastBody:{flex:1},errorToastTitle:{color:'#fff',fontSize:13,fontWeight:'900'},errorToastMessage:{marginTop:3,color:'#fff',fontSize:12,lineHeight:17,fontWeight:'600'},errorToastClose:{width:44,height:44,marginTop:-7,marginRight:-7,alignItems:'center',justifyContent:'center',borderRadius:12,backgroundColor:'#ffffff1f'},
-  loginPage:{flex:1,backgroundColor:palette.brand,paddingHorizontal:24,paddingTop:36},loginKeyboardAvoiding:{flex:1},loginScroll:{flexGrow:1},loginBrand:{marginTop:8,color:palette.white,fontSize:22,fontWeight:'800'},mini:{color:palette.accent,fontSize:11,letterSpacing:2},loginTitle:{marginTop:44,color:palette.white,fontSize:34,fontWeight:'800',letterSpacing:-1.2},loginCopy:{marginTop:10,color:'#c4d5cd',fontSize:15,lineHeight:22},loginCard:{marginTop:34,padding:20,borderRadius:20,backgroundColor:palette.white},loginJoin:{marginTop:20,alignItems:'center',gap:4},loginJoinText:{color:'#c4d5cd',fontSize:13},loginJoinLink:{color:palette.accent,fontSize:13,fontWeight:'800',textDecorationLine:'underline'},version:{marginTop:'auto',marginBottom:24,textAlign:'center',color:'#a9c3b7',fontSize:10,letterSpacing:2},
+  loginPage:{flex:1,backgroundColor:palette.brand,paddingHorizontal:24,paddingTop:36},loginKeyboardAvoiding:{flex:1},loginScroll:{flexGrow:1},loginBrand:{marginTop:8,color:palette.white,fontSize:22,fontWeight:'800'},mini:{color:palette.accent,fontSize:11,letterSpacing:2},loginTitle:{marginTop:44,color:palette.white,fontSize:34,fontWeight:'800',letterSpacing:-1.2},loginCopy:{marginTop:10,color:'#c4d5cd',fontSize:15,lineHeight:22},loginCard:{marginTop:34,padding:20,borderRadius:20,backgroundColor:palette.white},loginDivider:{marginVertical:16,flexDirection:'row',alignItems:'center',gap:10},loginDividerLine:{height:1,flex:1,backgroundColor:'#dce4df'},loginDividerText:{color:palette.secondary,fontSize:12,fontWeight:'700'},googleLoginButton:{minHeight:48,borderWidth:1,borderColor:'#cfd9d3',borderRadius:12,backgroundColor:palette.white,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:10},googleLoginText:{color:palette.brand,fontSize:13,fontWeight:'800'},loginJoin:{marginTop:20,alignItems:'center',gap:4},loginJoinText:{color:'#c4d5cd',fontSize:13},loginJoinLink:{color:palette.accent,fontSize:13,fontWeight:'800',textDecorationLine:'underline'},version:{marginTop:'auto',marginBottom:24,textAlign:'center',color:'#a9c3b7',fontSize:10,letterSpacing:2},
   registerScroll:{flexGrow:1,paddingBottom:28},authBack:{minHeight:44,marginLeft:-8,flexDirection:'row',alignItems:'center',gap:7,alignSelf:'flex-start',paddingHorizontal:8},authBackText:{color:palette.white,fontSize:13,fontWeight:'800'},registerTitle:{marginTop:24,color:palette.white,fontSize:31,fontWeight:'800',letterSpacing:-1},registrationNote:{marginTop:2,marginBottom:4,color:palette.secondary,fontSize:11,lineHeight:16,fontWeight:'600'},forgotPasswordButton:{minHeight:36,alignSelf:'flex-end',justifyContent:'center'},forgotPasswordText:{color:palette.action,fontSize:11,fontWeight:'900'},resendCodeButton:{minHeight:42,alignItems:'center',justifyContent:'center'},
   offerPage:{flex:1,backgroundColor:palette.background},offerScroll:{flexGrow:1,paddingHorizontal:22,paddingTop:28,paddingBottom:24},offerBrand:{color:palette.brand,fontSize:22,fontWeight:'900'},offerMini:{color:palette.action,fontSize:11,letterSpacing:2},offerEyebrow:{marginTop:38,color:palette.action,fontSize:10,fontWeight:'900',letterSpacing:1.25},offerTitle:{marginTop:8,color:palette.ink,fontSize:30,lineHeight:35,fontWeight:'900',letterSpacing:-1},offerCopy:{marginTop:10,color:palette.secondary,fontSize:14,lineHeight:21},offerList:{marginTop:26,gap:12},offerCard:{minHeight:94,padding:14,flexDirection:'row',alignItems:'center',gap:12,borderWidth:1,borderColor:palette.line,borderRadius:18,backgroundColor:palette.white},offerCardFeatured:{borderColor:'#83b79d',backgroundColor:'#f2faf5'},offerCardDisabled:{opacity:.65},offerIcon:{width:45,height:45,borderRadius:14,alignItems:'center',justifyContent:'center',backgroundColor:'#e5f2e9'},offerIconFeatured:{backgroundColor:palette.action},offerCardTitle:{color:palette.ink,fontSize:15,fontWeight:'900'},offerCardDetail:{marginTop:5,color:palette.secondary,fontSize:10,fontWeight:'700'},offerPriceWrap:{alignItems:'flex-end',gap:8},offerPrice:{color:palette.action,fontSize:12,fontWeight:'900'},trialProtection:{marginTop:18,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:6},trialProtectionText:{flex:1,color:palette.secondary,fontSize:10,lineHeight:15,fontWeight:'700'},offerLogout:{minHeight:44,marginTop:'auto',alignItems:'center',justifyContent:'center'},offerLogoutText:{color:palette.secondary,fontSize:12,fontWeight:'800'},pendingCard:{marginTop:28,padding:22,borderWidth:1,borderColor:'#ead7bd',borderRadius:22,backgroundColor:palette.white},pendingIcon:{width:54,height:54,borderRadius:18,alignItems:'center',justifyContent:'center',backgroundColor:'#fff1df'},pendingTitle:{marginTop:8,color:palette.ink,fontSize:25,fontWeight:'900'},pendingCopy:{marginTop:10,color:palette.secondary,fontSize:13,lineHeight:20},requestCode:{marginTop:22,padding:15,alignItems:'center',gap:6,borderRadius:14,backgroundColor:'#f2f5f3'},requestCodeLabel:{color:palette.secondary,fontSize:9,fontWeight:'900',letterSpacing:1},requestCodeValue:{color:palette.action,fontSize:24,fontWeight:'900',letterSpacing:1.5},pendingPlan:{marginTop:12,paddingVertical:12,flexDirection:'row',justifyContent:'space-between',gap:12,borderBottomWidth:1,borderBottomColor:palette.line},pendingPlanLabel:{color:palette.secondary,fontSize:11,fontWeight:'700'},pendingPlanValue:{color:palette.ink,fontSize:11,fontWeight:'900'},pendingActions:{marginTop:20,gap:12},offerWhatsapp:{height:49,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:8,borderRadius:13,backgroundColor:'#1fa855'},offerWhatsappText:{color:palette.white,fontSize:12,fontWeight:'900'},changePlanButton:{minHeight:44,marginTop:4,alignItems:'center',justifyContent:'center'},changePlanText:{color:palette.action,fontSize:11,fontWeight:'900'},
   topbar:{paddingTop:18,paddingHorizontal:20,paddingBottom:14,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:12,backgroundColor:palette.background},topbarBack:{width:44,height:44,alignItems:'center',justifyContent:'center',borderRadius:13,backgroundColor:palette.white},topbarTitle:{flex:1,minWidth:0},kicker:{color:palette.action,fontSize:11,fontWeight:'800',letterSpacing:1.2},screenTitle:{marginTop:3,fontSize:27,fontWeight:'800',color:palette.ink,letterSpacing:-.8},avatar:{width:44,height:44,borderWidth:1,borderColor:palette.line,borderRadius:22,alignItems:'center',justifyContent:'center',backgroundColor:palette.white},avatarActive:{borderColor:palette.accent,backgroundColor:palette.accent},
@@ -1169,6 +1193,7 @@ const darkStyles = StyleSheet.create({
   app:{backgroundColor:darkPalette.background},
   content:{backgroundColor:darkPalette.background},
   loginCard:{backgroundColor:darkPalette.surface},
+  googleLoginButton:{backgroundColor:darkPalette.surface,borderColor:darkPalette.border},googleLoginText:{color:darkPalette.text},loginDividerLine:{backgroundColor:darkPalette.border},
   topbar:{backgroundColor:darkPalette.background},
   screenTitle:{color:darkPalette.text},
   kicker:{color:palette.accent},

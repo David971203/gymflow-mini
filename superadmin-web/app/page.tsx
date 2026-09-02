@@ -56,6 +56,7 @@ const CUBAN_PROVINCES = [
   "Guantánamo",
   "Isla de la Juventud",
 ] as const;
+const normalizeSearch = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("es-CU").trim();
 const demoSubscriptionEnd = new Date(); demoSubscriptionEnd.setFullYear(demoSubscriptionEnd.getFullYear() + 1);
 const recentMonthKeys = () => Array.from({ length: 6 }, (_, index) => { const date = new Date(); date.setDate(1); date.setMonth(date.getMonth() - (5 - index)); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`; });
 const demoOverview: Overview = { gyms: 3, activeGyms: 3, members: 341, newMembers: 38, monthlyRevenue: 98050, pendingDebt: 12300, memberTrend: recentMonthKeys().map((month, index) => ({ month, members: [21, 28, 25, 31, 34, 38][index] })), subscriptionMonthlyRevenue:55000, subscriptionTotalRevenue:55000, activeTrialSubscriptions:1, activeMonthlySubscriptions:1, activeAnnualSubscriptions:1, expiredSubscriptions:0, withoutSubscriptions:0, pendingSubscriptionRequests:1 };
@@ -104,6 +105,7 @@ export default function Home() {
   const [gyms, setGyms] = useState<Gym[]>([]);
   const [subscriptions, setSubscriptions] = useState<PlatformSubscription[]>([]);
   const [subscriptionRequests, setSubscriptionRequests] = useState<SubscriptionRequest[]>([]);
+  const [requestSearch, setRequestSearch] = useState("");
   const [creating, setCreating] = useState(false);
   const [managing, setManaging] = useState<Gym | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -180,6 +182,23 @@ export default function Home() {
   const memberTrend = overview?.memberTrend ?? [];
   const trendMaximum = Math.max(1, ...memberTrend.map(point => point.members));
   const monthLabel = (month: string) => { const [year, monthNumber] = month.split("-").map(Number); return new Intl.DateTimeFormat("es-CU", { month: "short" }).format(new Date(year, monthNumber - 1, 1)).replace(".", ""); };
+  const pendingRequests = subscriptionRequests.filter(request => request.status === "PENDING");
+  const requestQuery = normalizeSearch(requestSearch);
+  const filteredRequests = pendingRequests.filter(request => {
+    if (!requestQuery) return true;
+    const owner = request.gym.users[0];
+    return normalizeSearch([
+      request.code,
+      request.gym.name,
+      request.gym.phone,
+      request.gym.province,
+      owner?.name,
+      owner?.email,
+      owner?.phone,
+      request.plan,
+      subscriptionPlanLabel(request.plan),
+    ].filter(Boolean).join(" ")).includes(requestQuery);
+  });
 
   return <main className="app-shell">
     <aside className="sidebar">
@@ -202,7 +221,7 @@ export default function Home() {
 
       <article className="panel subscription-overview"><div className="panel-title"><div><h2>Suscripciones de GymFlow Mini</h2><p>Estado actual de los planes contratados por los gimnasios.</p></div><span>Mensual 5 000 CUP · Anual 50 000 CUP</span></div><div className="subscription-stats"><div><span>Pruebas activas</span><strong>{overview?.activeTrialSubscriptions ?? 0}</strong><small>Sin ingreso</small></div><div><span>Mensuales activas</span><strong>{overview?.activeMonthlySubscriptions ?? 0}</strong><small>5 000 CUP por activación</small></div><div><span>Anuales activas</span><strong>{overview?.activeAnnualSubscriptions ?? 0}</strong><small>50 000 CUP por activación</small></div><div className={(overview?.expiredSubscriptions??0)>0?"attention":""}><span>Vencidas</span><strong>{overview?.expiredSubscriptions ?? 0}</strong><small>Solo consulta</small></div><div className={(overview?.withoutSubscriptions??0)>0?"attention":""}><span>Sin membresía</span><strong>{overview?.withoutSubscriptions ?? 0}</strong><small>Acciones bloqueadas</small></div></div></article>
 
-      <article className="panel request-panel"><div className="panel-title"><div><h2>Solicitudes de planes</h2><p>Operaciones P2P pendientes de comprobar y activar.</p></div><span>{overview?.pendingSubscriptionRequests ?? 0} pendiente{overview?.pendingSubscriptionRequests===1?"":"s"}</span></div><div className="request-list">{subscriptionRequests.filter(request=>request.status==="PENDING").map(request=>{const owner=request.gym.users[0];return <div className="request-row" key={request.id}><div className="request-code"><small>CÓDIGO</small><strong>{request.code}</strong></div><div><strong>{request.gym.name}</strong><small>{owner?.name??"Responsable"} · {owner?.email}</small><small>{request.gym.phone??owner?.phone??"Sin teléfono"} · {request.gym.province??"Provincia no indicada"}</small></div><span className={`history-plan ${request.plan.toLowerCase()}`}>{subscriptionPlanLabel(request.plan)}</span><div><strong>{new Date(request.requestedAt).toLocaleDateString("es-CU")}</strong><small>{new Date(request.requestedAt).toLocaleTimeString("es-CU",{hour:"2-digit",minute:"2-digit"})}</small></div><div className="request-actions"><button className="reject-request" onClick={()=>void resolveRequest(request,"REJECTED")}>Rechazar</button><button className="approve-request" onClick={()=>void resolveRequest(request,"APPROVED")}>Aprobar y activar</button></div></div>})}{!subscriptionRequests.some(request=>request.status==="PENDING")&&<p className="empty-copy">No hay solicitudes pendientes.</p>}</div></article>
+      <article className="panel request-panel"><div className="panel-title"><div><h2>Solicitudes de planes</h2><p>Operaciones P2P pendientes de comprobar y activar.</p></div><span>{overview?.pendingSubscriptionRequests ?? 0} pendiente{overview?.pendingSubscriptionRequests===1?"":"s"}</span></div><div className="request-search"><span aria-hidden="true">⌕</span><input type="search" aria-label="Buscar solicitudes de planes" value={requestSearch} onChange={event=>setRequestSearch(event.target.value)} placeholder="Buscar por gimnasio, código, responsable, correo o teléfono"/>{requestSearch?<button type="button" onClick={()=>setRequestSearch("")} aria-label="Limpiar búsqueda">×</button>:null}<small>{filteredRequests.length} de {pendingRequests.length}</small></div><div className="request-list">{filteredRequests.map(request=>{const owner=request.gym.users[0];return <div className="request-row" key={request.id}><div className="request-code"><small>CÓDIGO</small><strong>{request.code}</strong></div><div><strong>{request.gym.name}</strong><small>{owner?.name??"Responsable"} · {owner?.email}</small><small>{request.gym.phone??owner?.phone??"Sin teléfono"} · {request.gym.province??"Provincia no indicada"}</small></div><span className={`history-plan ${request.plan.toLowerCase()}`}>{subscriptionPlanLabel(request.plan)}</span><div><strong>{new Date(request.requestedAt).toLocaleDateString("es-CU")}</strong><small>{new Date(request.requestedAt).toLocaleTimeString("es-CU",{hour:"2-digit",minute:"2-digit"})}</small></div><div className="request-actions"><button className="reject-request" onClick={()=>void resolveRequest(request,"REJECTED")}>Rechazar</button><button className="approve-request" onClick={()=>void resolveRequest(request,"APPROVED")}>Aprobar y activar</button></div></div>})}{!pendingRequests.length?<p className="empty-copy">No hay solicitudes pendientes.</p>:!filteredRequests.length?<p className="empty-copy">No hay solicitudes que coincidan con la búsqueda.</p>:null}</div></article>
 
       <article className="panel subscription-history"><div className="panel-title"><div><h2>Historial de suscripciones</h2><p>Todas las activaciones y renovaciones registradas en la plataforma.</p></div><span>{subscriptions.length} registro{subscriptions.length===1?"":"s"}</span></div><div className="subscription-history-head"><span>Gimnasio</span><span>Plan</span><span>Período contratado</span><span>Activación</span><span>Ingreso</span></div>{subscriptions.map(subscription=><div className="subscription-history-row" key={subscription.id}><div><strong>{subscription.gym.name}</strong><small>{subscription.gym.slug}</small></div><span className={`history-plan ${subscription.plan.toLowerCase()}`}>{subscriptionPlanLabel(subscription.plan)}</span><div><strong>{new Date(subscription.startedAt).toLocaleDateString("es-CU")} – {new Date(subscription.endsAt).toLocaleDateString("es-CU")}</strong><small>{Math.max(1,Math.round((new Date(subscription.endsAt).getTime()-new Date(subscription.startedAt).getTime())/86_400_000))} días</small></div><div><strong>{new Date(subscription.activatedAt).toLocaleDateString("es-CU")}</strong><small>{new Date(subscription.activatedAt).toLocaleTimeString("es-CU",{hour:"2-digit",minute:"2-digit"})}</small></div><strong className="history-amount">{currency(Number(subscription.amount))} CUP</strong></div>)}{!subscriptions.length&&<p className="empty-copy">Todavía no hay suscripciones registradas.</p>}</article>
 

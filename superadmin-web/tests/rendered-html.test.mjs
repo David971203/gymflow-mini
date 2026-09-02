@@ -46,6 +46,8 @@ test("keeps the product metadata and API integration configured", async () => {
 
   assert.match(page, /NEXT_PUBLIC_API_URL/);
   assert.match(page, /\/platform\/overview/);
+  assert.match(page, /aria-label="Buscar solicitudes de planes"/);
+  assert.match(page, /filteredRequests/);
   assert.match(page, /\/platform\/gyms/);
   assert.match(page, /\/admins/);
   assert.match(page, /\/members/);

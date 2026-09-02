@@ -29,6 +29,7 @@ const googleSignin = TurboModuleRegistry.get('RNGoogleSignin')
   ? (require('@react-native-google-signin/google-signin') as typeof import('@react-native-google-signin/google-signin')).GoogleSignin
   : null;
 const googleLoginAvailable = Boolean(googleSignin && googleWebClientId);
+const appVersion = (require('./app.json') as { expo: { version:string } }).expo.version;
 const configuredRenewalWhatsApp = (process.env.EXPO_PUBLIC_RENEWAL_WHATSAPP ?? '').replace(/\D/g,'');
 const renewalWhatsApp = configuredRenewalWhatsApp.length === 8 ? `53${configuredRenewalWhatsApp}` : configuredRenewalWhatsApp;
 const money = (value: number | string) => `${Number(value).toLocaleString('es-CU', { maximumFractionDigits: 2 })} ${activeCurrency}`;
@@ -366,7 +367,7 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
             <Text style={styles.loginJoinLink}>Crear cuenta</Text>
           </Pressable>
         </View>
-        <Text style={styles.version}>V0.1</Text>
+        <Text style={styles.version}>V{appVersion}</Text>
         </KeyboardScrollContext.Provider>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -688,7 +689,7 @@ function AccountScreen({ user, onUserChange, themePreference, onThemeChange, onL
     <Pressable accessibilityRole="link" accessibilityLabel="Contactar soporte por WhatsApp" onPress={()=>openWhatsApp(`Hola, soy ${user.name}, administrador de ${user.gym.name}. Necesito soporte con GymFlow Mini.`)} style={({pressed})=>[styles.supportButton,pressed&&styles.tabPressed]}><View style={styles.supportIcon}><Ionicons name="logo-whatsapp" size={23} color={palette.white}/></View><View style={styles.rowMain}><Text style={styles.supportTitle}>Soporte por WhatsApp</Text><Text style={styles.supportCopy}>Contacta directamente con el equipo de GymFlow Mini</Text></View><Ionicons name="open-outline" size={19} color={palette.white}/></Pressable>
     {SHOW_THEME_SELECTOR ? <ThemeSelector value={themePreference} onChange={onThemeChange}/> : null}
     <Pressable accessibilityRole="button" onPress={confirmLogout} style={({pressed}) => [styles.logoutButton, pressed && styles.logoutButtonPressed]}><View style={styles.logoutIcon}><Ionicons name="log-out-outline" size={22} color={palette.danger}/></View><View style={styles.rowMain}><Text style={styles.logoutTitle}>Cerrar sesión</Text><Text style={styles.logoutCopy}>Salir de esta cuenta en el dispositivo</Text></View></Pressable>
-    <Text style={styles.accountVersion}>GYMFLOW MINI · PILOTO CUBA · V0.1</Text>
+    <Text style={styles.accountVersion}>GYMFLOW MINI · PILOTO CUBA · V{appVersion}</Text>
   </ScrollView></>;
 }
 

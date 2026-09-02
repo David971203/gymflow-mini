@@ -3,8 +3,9 @@
   "build": {
     "preview": {
       "distribution": "internal",
+      "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://gymflow-mini-backend-dev.onrender.com",
+        "EXPO_PUBLIC_API_URL": "https://gymflow-mini-backend.onrender.com",
         "EXPO_PUBLIC_RENEWAL_WHATSAPP": "58497886",
         "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "51180329583-fred74a252vdcddk151iltcf82gdpeu1.apps.googleusercontent.com",
         "EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID": "51180329583-bhoo433rar8g0ge5v0maqnev8dteo4k3.apps.googleusercontent.com"

@@ -60,4 +60,25 @@ describe('MailService', () => {
     expect(mime).toContain('From: GymFlow Mini <soporte@gmail.com>');
     expect(mime).toContain('To: owner@example.com');
   });
+
+  it('envía mediante Google Apps Script por HTTPS', async () => {
+    const values: Record<string, string> = {
+      MAIL_PROVIDER: 'apps_script',
+      APPS_SCRIPT_WEB_APP_URL: 'https://script.google.com/macros/s/deployment-id/exec',
+      APPS_SCRIPT_SECRET: 'shared-secret',
+    };
+    const config = { get: jest.fn((key: string) => values[key]) } as unknown as ConfigService;
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok:true }), { status:200 }));
+    const service = new MailService(config);
+
+    await expect(service.sendPasswordResetCode({ to:'owner@example.com', name:'Ana', code:'987654' })).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledWith(values.APPS_SCRIPT_WEB_APP_URL, expect.objectContaining({ method:'POST' }));
+    const request = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(String(request.body))).toMatchObject({
+      secret:'shared-secret',
+      to:'owner@example.com',
+      name:'Ana',
+      subject:expect.stringContaining('987654'),
+    });
+  });
 });

@@ -13,6 +13,11 @@ export class MailService {
     const text = `Hola ${input.name}. Tu código de recuperación es ${input.code}. Vence en 15 minutos y solo puede usarse una vez. Si no solicitaste este cambio, ignora este mensaje.`;
     const html = `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#17221d"><h2 style="color:#173f31">GymFlow Mini</h2><p>Hola ${this.escape(input.name)},</p><p>Usa este código para recuperar tu cuenta:</p><div style="margin:24px 0;padding:18px;text-align:center;background:#f2f5f3;border-radius:12px;font-size:30px;font-weight:800;letter-spacing:8px;color:#1d6b4d">${input.code}</div><p>El código vence en <strong>15 minutos</strong> y solo puede utilizarse una vez.</p><p style="color:#657169;font-size:13px">Si no solicitaste este cambio, ignora este mensaje. Tu contraseña no se modificará.</p></div>`;
     const provider = this.config.get<string>('MAIL_PROVIDER')?.trim().toLowerCase();
+    if (provider === 'apps_script' || provider === 'google_apps_script') {
+      await this.sendWithGoogleAppsScript({ ...input, subject, text, html });
+      return;
+    }
+
     if (provider === 'gmail' || provider === 'gmail_api') {
       await this.sendWithGmailApi({ ...input, subject, text, html });
       return;
@@ -44,6 +49,28 @@ export class MailService {
       });
     } catch (error) {
       this.logger.error(`No se pudo enviar el código de recuperación a ${input.to}`, error instanceof Error ? error.stack : undefined);
+      throw new ServiceUnavailableException('No se pudo enviar el correo de recuperación');
+    }
+  }
+
+  private async sendWithGoogleAppsScript(input: { to: string; name: string; subject: string; text: string; html: string }) {
+    const url = this.config.get<string>('APPS_SCRIPT_WEB_APP_URL')?.trim();
+    const secret = this.config.get<string>('APPS_SCRIPT_SECRET')?.trim();
+    if (!url || !secret) throw new ServiceUnavailableException('El correo de soporte no está configurado');
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ secret, to: input.to, name: input.name, subject: input.subject, text: input.text, html: input.html }),
+      });
+      if (!response.ok) {
+        const detail = (await response.text().catch(() => '')).slice(0, 300);
+        throw new Error(`Google Apps Script respondió ${response.status}${detail ? `: ${detail}` : ''}`);
+      }
+      const result = await response.json().catch(() => null) as { ok?: boolean; error?: string } | null;
+      if (!result?.ok) throw new Error(`Google Apps Script rechazó el envío${result?.error ? `: ${result.error.slice(0, 200)}` : ''}`);
+    } catch (error) {
+      this.logger.error(`No se pudo enviar el código de recuperación a ${input.to} mediante Google Apps Script`, error instanceof Error ? error.stack : undefined);
       throw new ServiceUnavailableException('No se pudo enviar el correo de recuperación');
     }
   }

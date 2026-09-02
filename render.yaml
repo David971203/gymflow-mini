@@ -9,7 +9,6 @@ services:
     region: virginia
     healthCheckPath: /api/health
     autoDeployTrigger: commit
-    initialDeployHook: npm run prisma:seed
     envVars:
       - key: NODE_ENV
         value: development
@@ -21,6 +20,8 @@ services:
         generateValue: true
       - key: CORS_ORIGIN
         value: "*"
+      - key: SEED_DATABASE
+        value: "true"
 
 databases:
   - name: gymflow-mini-db-dev

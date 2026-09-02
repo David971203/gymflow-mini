@@ -176,7 +176,7 @@ funciona tanto para `prisma migrate deploy` como para el backend persistente.
 - `main` alimenta el backend actual de producción: `https://gymflow-mini-backend.onrender.com`.
 - `desarrollo` alimenta `gymflow-mini-backend-dev` y su PostgreSQL independiente `gymflow-mini-db-dev`.
 - `render.yaml` define únicamente los recursos de desarrollo. Cada push a `desarrollo` despliega automáticamente el backend dev.
-- El primer despliegue aplica las migraciones desde el `Dockerfile` y luego ejecuta el seed una sola vez.
+- El contenedor aplica las migraciones antes de arrancar. En desarrollo, `SEED_DATABASE=true` mantiene disponibles los datos demo mediante un seed idempotente; producción no define esa variable.
 - La base gratuita de Render caduca 30 días después de crearla. Para conservar los datos de desarrollo hay que cambiarla a un plan de pago antes de esa fecha.
 
 Flujo recomendado para una funcionalidad nueva:

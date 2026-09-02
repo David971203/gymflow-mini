@@ -4,7 +4,8 @@
     "slug": "gymflow-mini-admin",
     "version": "0.1.0",
     "platforms": [
-      "android"
+      "android",
+      "ios"
     ],
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
@@ -24,6 +25,15 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#D8FF3F"
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "com.gymflow.mini.admin",
+      "buildNumber": "1",
+      "supportsTablet": false,
+      "icon": "./assets/ios-icon.png",
+      "config": {
+        "usesNonExemptEncryption": false
       }
     },
     "plugins": [

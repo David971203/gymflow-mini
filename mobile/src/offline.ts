@@ -136,7 +136,7 @@ export const offline = {
       const members = await offline.members(scope);
       if (members.some((member) => member.ci === input.ci)) throw new Error('Ya existe un miembro local con ese carnet de identidad');
       if (input.code && members.some((member) => member.code === input.code)) throw new Error('Ya existe un miembro local con ese código interno');
-      members.unshift({ id, ...input, status: 'ACTIVE', memberships: [] });
+      members.unshift({ id, ...input, status: 'ACTIVE', joinedAt: occurredAt, memberships: [] });
       await writeCache(scope, 'members', members);
       await enqueue(scope, { id: operationId, type: 'MEMBER_CREATE', entityId: id, payload: input, occurredAt });
     });
@@ -246,7 +246,7 @@ export const offline = {
       const movements: Movement[] = initial > 0 ? [{ id: operationId, amount: String(initial), occurredAt }] : [];
       const membership: Membership = { id: membershipId, status: 'ACTIVE', startDate: startDate.toISOString(), endDate: endDate.toISOString(), periodCount, plan, planName:plan.name, planPrice:plan.price, planDurationDays:plan.durationDays };
       member.status = 'ACTIVE';
-      const payment: Payment = { id: paymentId, amount: String(total), paidAmount: String(initial), status, createdAt: occurredAt, dueDate: startDate.toISOString(), member, membership: { id:membershipId, plan, planName:plan.name, planPrice:plan.price, planDurationDays:plan.durationDays, periodCount }, movements };
+      const payment: Payment = { id: paymentId, amount: String(total), paidAmount: String(initial), status, createdAt: occurredAt, dueDate: startDate.toISOString(), member, membership: { id:membershipId, status:'ACTIVE', startDate:startDate.toISOString(), endDate:endDate.toISOString(), plan, planName:plan.name, planPrice:plan.price, planDurationDays:plan.durationDays, periodCount }, movements };
       member.memberships.unshift(membership); payments.unshift(payment);
       await writeCache(scope, 'members', members); await writeCache(scope, 'payments', payments);
       await enqueue(scope, { id: operationId, type: 'MEMBERSHIP_ASSIGN', entityId: membershipId, payload: { ...input, clientPaymentId: paymentId }, occurredAt });
@@ -275,6 +275,9 @@ export const offline = {
       membership.plan = plan; membership.status = input.status;
       if (payment) {
         payment.membership.plan = plan;
+        payment.membership.status = input.status;
+        payment.membership.startDate = membership.startDate;
+        payment.membership.endDate = membership.endDate;
         if (plan.id !== oldPlanId) {
           payment.membership.planName = plan.name; payment.membership.planPrice = plan.price; payment.membership.planDurationDays = plan.durationDays;
         }
@@ -309,7 +312,7 @@ export const offline = {
       const paymentStatus = initial === 0 ? 'PENDING' : initial >= total ? 'PAID' : 'PARTIAL';
       const movements: Movement[] = initial > 0 ? [{ id: operationId, amount: String(initial), occurredAt }] : [];
       const membership: Membership = { id:membershipId, status:startDate > now ? 'SCHEDULED' : 'ACTIVE', startDate:startDate.toISOString(), endDate:endDate.toISOString(), periodCount, plan, planName:plan.name, planPrice:plan.price, planDurationDays:plan.durationDays };
-      const payment: Payment = { id:paymentId, amount:String(total), paidAmount:String(initial), status:paymentStatus, createdAt:occurredAt, dueDate:startDate.toISOString(), member, membership:{ id:membershipId, plan, planName:plan.name, planPrice:plan.price, planDurationDays:plan.durationDays, periodCount }, movements };
+      const payment: Payment = { id:paymentId, amount:String(total), paidAmount:String(initial), status:paymentStatus, createdAt:occurredAt, dueDate:startDate.toISOString(), member, membership:{ id:membershipId, status:startDate > now ? 'SCHEDULED' : 'ACTIVE', startDate:startDate.toISOString(), endDate:endDate.toISOString(), plan, planName:plan.name, planPrice:plan.price, planDurationDays:plan.durationDays, periodCount }, movements };
       member.memberships.unshift(membership); payments.unshift(payment);
       await writeCache(scope, 'members', members); await writeCache(scope, 'payments', payments);
       await enqueue(scope, { id: operationId, type: 'MEMBERSHIP_RENEW', entityId: currentMembershipId, payload: { ...input, clientMembershipId: membershipId, clientPaymentId: paymentId }, occurredAt });

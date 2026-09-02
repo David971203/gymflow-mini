@@ -1,5 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 import * as Application from 'expo-application';
+import { Platform } from 'react-native';
 import type { Dashboard, Member, Payment, Plan, SyncOperation, SyncResult, SyncSnapshot, User } from './types';
 
 const BASE_URL = `${process.env.EXPO_PUBLIC_API_URL ?? 'http://10.0.2.2:3100'}/api`;
@@ -24,9 +25,13 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 async function deviceId() {
-  if (Application.getAndroidId) {
+  if (Platform.OS === 'android') {
     const androidId = Application.getAndroidId();
     if (androidId) return `android:${androidId}`;
+  }
+  if (Platform.OS === 'ios') {
+    const iosId = await Application.getIosIdForVendorAsync();
+    if (iosId) return `ios:${iosId}`;
   }
   const existing = await SecureStore.getItemAsync(DEVICE_KEY);
   if (existing) return existing;

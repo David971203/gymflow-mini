@@ -159,7 +159,9 @@ export type SyncOperationType = (typeof SYNC_OPERATION_TYPES)[number];
 export class SyncOperationDto {
   @IsUUID() id: string;
   @IsIn(SYNC_OPERATION_TYPES) type: SyncOperationType;
-  @IsUUID() entityId: string;
+  // Las entidades históricas pueden tener IDs legibles creados por seeds
+  // anteriores. El recibo de sincronización sí conserva un UUID estricto.
+  @IsString() @MinLength(1) @MaxLength(191) entityId: string;
   @IsDateString() occurredAt: string;
   @IsObject() payload: Record<string, unknown>;
 }

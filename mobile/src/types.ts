@@ -1,15 +1,15 @@
-export type Tab = 'INICIO' | 'MIEMBROS' | 'PLANES' | 'CAJA' | 'CUENTA';
+export type Tab = 'INICIO' | 'MIEMBROS' | 'PLANES' | 'CAJA' | 'ESTADISTICAS' | 'CUENTA';
 export type Currency = 'CUP' | 'USD';
 export type GymSubscriptionPlan = 'TRIAL' | 'MONTHLY' | 'ANNUAL';
 export type SubscriptionRequest = { id: string; code: string; plan: Exclude<GymSubscriptionPlan, 'TRIAL'>; status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED'; requestedAt: string; resolvedAt?: string | null };
 export type User = { id: string; email: string; phone?: string | null; name: string; role: 'ADMIN'; gymId: string; gym: { name: string; currency: Currency; subscriptionPlan: GymSubscriptionPlan | null; subscriptionTrialDays: number; subscriptionStartedAt: string | null; subscriptionEndsAt: string | null }; subscriptionRequest?: SubscriptionRequest | null; latestSubscriptionRequest?: SubscriptionRequest | null };
 export type Dashboard = { members: number; activeMemberships: number; monthlyRevenue: number; pendingDebt: number; recentPayments: Movement[] };
 export type Plan = { id: string; name: string; description?: string; price: string; durationDays: number; isActive: boolean };
-export type Payment = { id: string; amount: string; paidAmount: string; status: string; createdAt?: string; dueDate?: string | null; member: Member; membership: { id?: string; plan: Plan; planName?: string; planPrice?: string; planDurationDays?: number; periodCount?: number }; movements: Movement[] };
+export type Payment = { id: string; amount: string; paidAmount: string; status: string; createdAt?: string; dueDate?: string | null; member: Member; membership: { id?: string; status?: string; startDate?: string; endDate?: string; plan: Plan; planName?: string; planPrice?: string; planDurationDays?: number; periodCount?: number }; movements: Movement[] };
 export type Movement = { id: string; amount: string; occurredAt: string; payment?: { member: Member } };
 export type Membership = { id: string; status: string; startDate: string; endDate: string; periodCount?: number; plan: Plan; planName?: string; planPrice?: string; planDurationDays?: number; payment?: Payment };
 export type MemberSex = 'MALE' | 'FEMALE' | 'OTHER';
-export type Member = { id: string; ci: string; code?: string | null; firstName: string; lastName: string; age?: number | null; sex?: MemberSex | null; phone?: string; address?: string; status: string; memberships: Membership[] };
+export type Member = { id: string; ci: string; code?: string | null; firstName: string; lastName: string; age?: number | null; sex?: MemberSex | null; phone?: string; address?: string; status: string; joinedAt?: string; memberships: Membership[] };
 
 export type SyncOperationType = 'MEMBER_CREATE' | 'MEMBER_UPDATE' | 'MEMBER_DELETE' | 'PLAN_CREATE' | 'PLAN_UPDATE' | 'PLAN_DELETE' | 'MEMBERSHIP_ASSIGN' | 'MEMBERSHIP_UPDATE' | 'MEMBERSHIP_RENEW' | 'MEMBERSHIP_DELETE' | 'PAYMENT_APPLY';
 export type SyncOperation = { id: string; type: SyncOperationType; entityId: string; payload: Record<string, unknown>; occurredAt: string };

@@ -171,7 +171,7 @@ El host, la región y el usuario del pooler deben copiarse del panel; no basta c
 cambiar el host de la URL directa. El modo sesión (puerto `5432`) admite IPv4 y
 funciona tanto para `prisma migrate deploy` como para el backend persistente.
 
-### 2. Aplicación Android
+### 2. Aplicación móvil (Android e iOS)
 
 ```bash
 cd mobile
@@ -183,6 +183,21 @@ npm run start
 En el emulador Android, el valor por defecto `http://10.0.2.2:3100` alcanza la computadora. En un teléfono físico configura `EXPO_PUBLIC_API_URL` con la IP LAN de la computadora.
 
 Para generar un APK instalable mediante EAS: `npx eas build --platform android --profile preview`. El perfil ya está definido en `mobile/eas.json`.
+
+La versión iOS usa el bundle `com.gymflow.mini.admin`. Perfiles disponibles:
+
+```bash
+# Build para iOS Simulator (no necesita credenciales de Apple)
+npx eas build --platform ios --profile ios-simulator
+
+# Instalación interna en iPhone registrado
+npx eas build --platform ios --profile preview
+
+# Build para TestFlight/App Store
+npx eas build --platform ios --profile production
+```
+
+`npm run ios` ejecuta el proyecto nativo localmente y requiere macOS con Xcode. Desde Windows se puede solicitar el build en EAS, pero el archivo del simulador debe ejecutarse posteriormente en un Mac.
 
 ### 3. Panel web
 

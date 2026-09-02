@@ -3,12 +3,23 @@
   "build": {
     "preview": {
       "distribution": "internal",
-      "env": { "EXPO_PUBLIC_RENEWAL_WHATSAPP": "58497886" },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://gymflow-mini-backend.onrender.com",
+        "EXPO_PUBLIC_RENEWAL_WHATSAPP": "58497886"
+      },
       "android": { "buildType": "apk" }
     },
+    "ios-simulator": {
+      "extends": "preview",
+      "ios": { "simulator": true }
+    },
     "production": {
-      "env": { "EXPO_PUBLIC_RENEWAL_WHATSAPP": "58497886" },
-      "android": { "buildType": "app-bundle" }
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://gymflow-mini-backend.onrender.com",
+        "EXPO_PUBLIC_RENEWAL_WHATSAPP": "58497886"
+      },
+      "android": { "buildType": "app-bundle" },
+      "ios": { "autoIncrement": "buildNumber" }
     }
   }
 }

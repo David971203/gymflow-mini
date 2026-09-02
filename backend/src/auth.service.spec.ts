@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { GymSubscriptionPlan, Prisma, UserRole } from '@prisma/client';
 import { AuthService } from './auth.service';
 
@@ -70,6 +70,19 @@ describe('AuthService self-service security', () => {
     expect(sentCode).toMatch(/^\d{6}$/);
     expect(create).toHaveBeenCalledWith({data:expect.objectContaining({userId:'user-1',codeHash:expect.stringMatching(/^[a-f0-9]{64}$/)})});
     expect(create.mock.calls[0][0].data.codeHash).not.toBe(sentCode);
+  });
+
+  it('informa cuando el correo no pertenece a una cuenta activa', async () => {
+    const prisma = {
+      user:{findUnique:jest.fn().mockResolvedValue(null)},
+    };
+    const sendPasswordResetCode = jest.fn();
+    const service = new AuthService(prisma as never,{signAsync:jest.fn()} as never,{sendPasswordResetCode} as never);
+
+    await expect(service.forgotPassword({email:'desconocido@gym.cu'})).rejects.toEqual(
+      new NotFoundException('El correo no se encuentra registrado en el sistema'),
+    );
+    expect(sendPasswordResetCode).not.toHaveBeenCalled();
   });
 
   it('cuenta los intentos fallidos sin aceptar un código incorrecto', async () => {

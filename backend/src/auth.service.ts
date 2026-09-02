@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { GymSubscriptionPlan, Prisma, SubscriptionRequestStatus, UserRole } from '@prisma/client';
 import * as argon2 from 'argon2';
@@ -121,9 +121,9 @@ export class AuthService {
   }
 
   async forgotPassword(dto: ForgotPasswordDto) {
-    const response = { message: 'Si el correo está registrado, recibirás un código de recuperación.' };
+    const response = { message: 'El código de recuperación fue enviado.' };
     const user = await this.prisma.user.findUnique({ where: { email: dto.email.trim().toLowerCase() }, select: { id: true, email: true, name: true, isActive: true } });
-    if (!user?.isActive) return response;
+    if (!user?.isActive) throw new NotFoundException('El correo no se encuentra registrado en el sistema');
     const minuteAgo = new Date(Date.now() - 60_000);
     const recent = await this.prisma.passwordResetCode.findFirst({ where: { userId: user.id, usedAt: null, createdAt: { gte: minuteAgo } } });
     if (recent) return response;

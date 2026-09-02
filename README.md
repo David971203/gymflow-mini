@@ -171,6 +171,26 @@ El host, la región y el usuario del pooler deben copiarse del panel; no basta c
 cambiar el host de la URL directa. El modo sesión (puerto `5432`) admite IPv4 y
 funciona tanto para `prisma migrate deploy` como para el backend persistente.
 
+### Entornos de producción y desarrollo en Render
+
+- `main` alimenta el backend actual de producción: `https://gymflow-mini-backend.onrender.com`.
+- `desarrollo` alimenta `gymflow-mini-backend-dev` y su PostgreSQL independiente `gymflow-mini-db-dev`.
+- `render.yaml` define únicamente los recursos de desarrollo. Cada push a `desarrollo` despliega automáticamente el backend dev.
+- El primer despliegue aplica las migraciones desde el `Dockerfile` y luego ejecuta el seed una sola vez.
+- La base gratuita de Render caduca 30 días después de crearla. Para conservar los datos de desarrollo hay que cambiarla a un plan de pago antes de esa fecha.
+
+Flujo recomendado para una funcionalidad nueva:
+
+```bash
+git switch desarrollo
+git pull origin desarrollo
+# trabajar, validar y publicar en desarrollo
+git push origin desarrollo
+# cuando esté aprobada, integrar desarrollo en main para producción
+```
+
+Los builds `preview` e `ios-simulator` de Expo usan el backend de desarrollo. El perfil `production` conserva siempre la URL del backend productivo.
+
 ### 2. Aplicación móvil (Android e iOS)
 
 ```bash

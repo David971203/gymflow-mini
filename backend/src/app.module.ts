@@ -6,6 +6,7 @@ import { PassportModule } from '@nestjs/passport';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { GymSubscriptionGuard, JwtGuard, RolesGuard } from './guards';
+import { HealthController } from './health.controller';
 import { JwtStrategy } from './jwt.strategy';
 import { AdminController, PlatformController } from './mini.controller';
 import { MiniService } from './mini.service';
@@ -21,7 +22,7 @@ import { SyncService } from './sync.service';
     PassportModule,
     JwtModule.registerAsync({ inject: [ConfigService], useFactory: (config: ConfigService) => ({ secret: config.getOrThrow('JWT_SECRET'), signOptions: { expiresIn: '12h' } }) }),
   ],
-  controllers: [AuthController, PlatformController, AdminController, SyncController],
+  controllers: [HealthController, AuthController, PlatformController, AdminController, SyncController],
   providers: [PrismaService, AuthService, MailService, MiniService, MembershipExpirationService, SyncService, JwtStrategy, { provide: APP_GUARD, useClass: JwtGuard }, { provide: APP_GUARD, useClass: RolesGuard }, { provide: APP_GUARD, useClass: GymSubscriptionGuard }],
 })
 export class AppModule {}

@@ -11,7 +11,7 @@ async function main() {
     create: { name: 'Habana Fitness', slug: 'habana-fitness', province: 'La Habana', phone: '+53 5 123 4567', subscriptionPlan: GymSubscriptionPlan.ANNUAL, subscriptionStartedAt, subscriptionEndsAt },
   });
   await prisma.user.upsert({ where: { email: 'super@gymflowmini.cu' }, update: {}, create: { email: 'super@gymflowmini.cu', passwordHash: await argon2.hash('SuperMini123!'), name: 'David', role: UserRole.SUPER_ADMIN } });
-  const admin = await prisma.user.upsert({ where: { email: 'admin@habanafitness.cu' }, update: {}, create: { email: 'admin@habanafitness.cu', passwordHash: await argon2.hash('AdminMini123!'), name: 'Administrador Habana Fitness', role: UserRole.ADMIN, gymId: gym.id } });
+  const admin = await prisma.user.upsert({ where: { email: 'admin@habanafitness.cu' }, update: { phone: '+53 5 123 4567' }, create: { email: 'admin@habanafitness.cu', phone: '+53 5 123 4567', passwordHash: await argon2.hash('AdminMini123!'), name: 'Administrador Habana Fitness', role: UserRole.ADMIN, gymId: gym.id } });
 
   const monthly = await prisma.plan.upsert({ where: { gymId_name: { gymId: gym.id, name: 'Mensual' } }, update: {}, create: { gymId: gym.id, name: 'Mensual', description: 'Acceso durante 30 días', price: 3500, durationDays: 30 } });
   await prisma.plan.upsert({ where: { gymId_name: { gymId: gym.id, name: 'Quincenal' } }, update: {}, create: { gymId: gym.id, name: 'Quincenal', description: 'Acceso durante 15 días', price: 2000, durationDays: 15 } });

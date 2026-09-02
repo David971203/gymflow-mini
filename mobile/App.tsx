@@ -1076,7 +1076,7 @@ function MemberPhotoAvatar({ member, profile = false, editor = false }: { member
   }, [member.id, member.photoUpdatedAt]);
   const containerStyle = editor ? styles.memberPhotoEditorAvatar : profile ? styles.memberProfileAvatar : styles.memberAvatar;
   const textStyle = editor ? styles.memberPhotoEditorInitials : profile ? styles.memberProfileInitials : styles.memberAvatarText;
-  return <View style={containerStyle}>{source ? <Image source={source} onError={() => setSource(null)} resizeMode="cover" style={styles.memberAvatarImage}/> : <Text style={textStyle}>{member.firstName[0]}{member.lastName[0]}</Text>}</View>;
+  return <View style={[containerStyle,styles.memberAvatarClip]}>{source ? <Image source={source} onError={() => setSource(null)} resizeMode="cover" style={styles.memberAvatarImage}/> : <Text style={textStyle}>{member.firstName[0]}{member.lastName[0]}</Text>}</View>;
 }
 function showError(error: unknown) { publishErrorToast(error instanceof Error ? error.message : typeof error === 'string' ? error : 'Ocurrió un error'); }
 function showSuccess(message: string) { publishToast(message, 'success'); }
@@ -1156,7 +1156,8 @@ const baseStyles = StyleSheet.create(withReadableType({
   memberPhotoEditorCopy:{marginTop:4,color:palette.secondary,fontSize:9,lineHeight:14},
   memberPhotoEditorButton:{minHeight:42,marginTop:10,paddingHorizontal:12,alignSelf:'flex-start',flexDirection:'row',alignItems:'center',justifyContent:'center',gap:6,borderWidth:1,borderColor:'#cfe3d6',borderRadius:11,backgroundColor:'#f4faf6'},
   memberPhotoEditorButtonText:{color:palette.action,fontSize:11,fontWeight:'900'},
-  memberAvatarImage:{...StyleSheet.absoluteFillObject,width:'100%',height:'100%',borderRadius:26},
+  memberAvatarClip:{overflow:'hidden'},
+  memberAvatarImage:{...StyleSheet.absoluteFillObject,width:'100%',height:'100%'},
 }));
 
 const darkPalette = {

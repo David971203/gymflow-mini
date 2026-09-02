@@ -22,8 +22,8 @@
         "android.permission.SCHEDULE_EXACT_ALARM"
       ],
       "adaptiveIcon": {
-        "foregroundImage": "./assets/icon.png",
-        "backgroundColor": "#173f31"
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#D8FF3F"
       }
     },
     "plugins": [

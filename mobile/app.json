@@ -41,9 +41,17 @@
       "expo-sqlite",
       "expo-font",
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "Permite a GymFlow Mini seleccionar una foto para el perfil del miembro.",
+          "cameraPermission": "Permite a GymFlow Mini tomar una foto para el perfil del miembro.",
+          "microphonePermission": false
+        }
+      ],
+      [
         "expo-camera",
         {
-          "cameraPermission": "Permite a GymFlow Mini usar la cámara para escanear los códigos QR de los miembros.",
+          "cameraPermission": "Permite a GymFlow Mini usar la cámara para escanear códigos QR y tomar fotos de los miembros.",
           "microphonePermission": false,
           "recordAudioAndroid": false
         }

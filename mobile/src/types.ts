@@ -9,7 +9,7 @@ export type Payment = { id: string; amount: string; paidAmount: string; status: 
 export type Movement = { id: string; amount: string; occurredAt: string; payment?: { member: Member } };
 export type Membership = { id: string; status: string; startDate: string; endDate: string; periodCount?: number; plan: Plan; planName?: string; planPrice?: string; planDurationDays?: number; payment?: Payment };
 export type MemberSex = 'MALE' | 'FEMALE' | 'OTHER';
-export type Member = { id: string; qrCode: string; ci: string; code?: string | null; firstName: string; lastName: string; age?: number | null; sex?: MemberSex | null; phone?: string; address?: string; status: string; joinedAt?: string; memberships: Membership[] };
+export type Member = { id: string; qrCode: string; ci: string; code?: string | null; firstName: string; lastName: string; age?: number | null; sex?: MemberSex | null; phone?: string; address?: string; status: string; joinedAt?: string; photoUpdatedAt?: string | null; memberships: Membership[] };
 
 export type Attendance = { id: string; memberId: string; checkInAt: string; checkOutAt?: string | null; method: 'QR' | 'MANUAL'; member: Pick<Member, 'id' | 'firstName' | 'lastName' | 'status' | 'qrCode'> };
 

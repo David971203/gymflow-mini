@@ -1,6 +1,8 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, StreamableFile, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { UserRole } from '@prisma/client';
+import type { Response } from 'express';
 import { CurrentUser, Roles, type AuthUser } from './common';
 import { MiniService } from './mini.service';
 import { ApplyPaymentDto, AssignGymMembershipDto, CreateGymAdminDto, CreateGymDto, CreateMemberDto, CreateMembershipDto, CreatePlanDto, RenewMembershipDto, ResolveSubscriptionRequestDto, UpdateGymAdminDto, UpdateGymDto, UpdateGymMembershipDto, UpdateGymStatusDto, UpdateGymSubscriptionDto, UpdateMemberDto, UpdatePlanDto } from './mini.dto';
@@ -53,6 +55,16 @@ export class AdminController {
   @Post('members') createMember(@Body() dto: CreateMemberDto, @CurrentUser() user: AuthUser) { return this.mini.createMember(dto, user); }
   @Patch('members/:id') updateMember(@Param('id') id: string, @Body() dto: UpdateMemberDto, @CurrentUser() user: AuthUser) { return this.mini.updateMember(id, dto, user); }
   @Delete('members/:id') deleteMember(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.mini.deleteMember(id, user); }
+  @Post('members/:id/photo')
+  @UseInterceptors(FileInterceptor('photo', { limits: { files: 1, fileSize: 250 * 1024 } }))
+  uploadMemberPhoto(@Param('id') id: string, @UploadedFile() file: Express.Multer.File | undefined, @CurrentUser() user: AuthUser) { return this.mini.saveMemberPhoto(id, file, user); }
+  @Get('members/:id/photo')
+  async memberPhoto(@Param('id') id: string, @CurrentUser() user: AuthUser, @Res({ passthrough: true }) response: Response) {
+    const photo = await this.mini.getMemberPhoto(id, user);
+    response.set({ 'Content-Type': photo.mimeType, 'Content-Length': String(photo.byteSize), 'Cache-Control': 'private, max-age=86400' });
+    return new StreamableFile(photo.data);
+  }
+  @Delete('members/:id/photo') deleteMemberPhoto(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.mini.deleteMemberPhoto(id, user); }
 
   @Get('plans') plans(@CurrentUser() user: AuthUser) { return this.mini.listPlans(user); }
   @Post('plans') createPlan(@Body() dto: CreatePlanDto, @CurrentUser() user: AuthUser) { return this.mini.createPlan(dto, user); }

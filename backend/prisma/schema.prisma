@@ -154,33 +154,47 @@ model PasswordResetCode {
 }
 
 model Member {
-  id        String       @id @default(uuid())
-  gymId     String
-  gym       Gym          @relation(fields: [gymId], references: [id])
+  id             String       @id @default(uuid())
+  gymId          String
+  gym            Gym          @relation(fields: [gymId], references: [id])
   /// Carnet de identidad cubano. Se conserva como texto por los ceros iniciales.
-  ci        String
+  ci             String
   /// Código interno opcional asignado por cada gimnasio.
-  code      String?
-  firstName String
-  lastName  String
-  age       Int?
-  sex       String?
-  phone     String?
-  address   String?
-  qrCode    String       @unique @default(uuid())
-  status    MemberStatus @default(ACTIVE)
-  joinedAt  DateTime     @default(now())
-  createdAt DateTime     @default(now())
-  updatedAt DateTime     @updatedAt
+  code           String?
+  firstName      String
+  lastName       String
+  age            Int?
+  sex            String?
+  phone          String?
+  address        String?
+  qrCode         String       @unique @default(uuid())
+  status         MemberStatus @default(ACTIVE)
+  joinedAt       DateTime     @default(now())
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  photoUpdatedAt DateTime?
 
   memberships Membership[]
   payments    Payment[]
   attendances Attendance[]
+  photo       MemberPhoto?
 
   @@unique([gymId, ci])
   @@unique([gymId, code])
   @@index([gymId])
   @@index([status])
+}
+
+model MemberPhoto {
+  memberId  String   @id
+  member    Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  gymId     String
+  data      Bytes
+  mimeType  String
+  byteSize  Int
+  updatedAt DateTime @updatedAt
+
+  @@index([gymId])
 }
 
 model Attendance {

@@ -217,6 +217,41 @@ export class MiniService {
     }
   }
 
+  async saveMemberPhoto(id: string, file: Express.Multer.File | undefined, user: AuthUser) {
+    const gymId = this.gymId(user);
+    await this.requireMember(id, user);
+    if (!file?.buffer?.length) throw new BadRequestException('Selecciona una foto válida');
+    if (file.size > 250 * 1024) throw new BadRequestException('La foto supera el límite de 250 KB');
+    const isJpeg = file.buffer.length >= 3 && file.buffer[0] === 0xff && file.buffer[1] === 0xd8 && file.buffer[2] === 0xff;
+    if (file.mimetype !== 'image/jpeg' || !isJpeg) throw new BadRequestException('La foto debe estar en formato JPEG');
+    const photoUpdatedAt = new Date();
+    await this.prisma.$transaction([
+      this.prisma.memberPhoto.upsert({
+        where: { memberId: id },
+        create: { memberId: id, gymId, data: file.buffer, mimeType: 'image/jpeg', byteSize: file.size },
+        update: { gymId, data: file.buffer, mimeType: 'image/jpeg', byteSize: file.size },
+      }),
+      this.prisma.member.update({ where: { id }, data: { photoUpdatedAt } }),
+    ]);
+    return { photoUpdatedAt };
+  }
+
+  async getMemberPhoto(id: string, user: AuthUser) {
+    await this.requireMember(id, user);
+    const photo = await this.prisma.memberPhoto.findUnique({ where: { memberId: id } });
+    if (!photo) throw new NotFoundException('El miembro no tiene una foto');
+    return photo;
+  }
+
+  async deleteMemberPhoto(id: string, user: AuthUser) {
+    await this.requireMember(id, user);
+    await this.prisma.$transaction([
+      this.prisma.memberPhoto.deleteMany({ where: { memberId: id, gymId: this.gymId(user) } }),
+      this.prisma.member.update({ where: { id }, data: { photoUpdatedAt: null } }),
+    ]);
+    return { id, photoUpdatedAt: null };
+  }
+
   async deleteGymMember(gymId: string, id: string) {
     const member = await this.prisma.member.findFirst({ where: { id, gymId } });
     if (!member) throw new NotFoundException('Miembro no encontrado');

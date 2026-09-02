@@ -15,9 +15,10 @@ export class ApiError extends Error {
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const token = await SecureStore.getItemAsync(TOKEN_KEY);
+  const multipart = typeof FormData !== 'undefined' && options?.body instanceof FormData;
   const response = await fetch(`${BASE_URL}${path}`, {
     ...options,
-    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options?.headers },
+    headers: { ...(!multipart ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options?.headers },
   });
   const data = await response.json().catch(() => null);
   if (!response.ok) throw new ApiError(Array.isArray(data?.message) ? data.message.join(', ') : data?.message ?? 'No se pudo completar la operación', response.status);
@@ -88,6 +89,16 @@ export const api = {
   dashboard: () => request<Dashboard>('/dashboard'),
   members: () => request<Member[]>('/members'),
   createMember: (input: Pick<Member, 'ci' | 'firstName' | 'lastName'> & Partial<Pick<Member, 'code' | 'age' | 'sex' | 'phone' | 'address'>>) => request<Member>('/members', { method: 'POST', body: JSON.stringify(input) }),
+  memberPhotoSource: async (member: Pick<Member, 'id' | 'photoUpdatedAt'>) => {
+    const token = await SecureStore.getItemAsync(TOKEN_KEY);
+    return { uri:`${BASE_URL}/members/${member.id}/photo?v=${encodeURIComponent(member.photoUpdatedAt ?? '')}`, ...(token ? { headers:{ Authorization:`Bearer ${token}` } } : {}) };
+  },
+  uploadMemberPhoto: (id: string, uri: string) => {
+    const form = new FormData();
+    form.append('photo', { uri, name:'member-photo.jpg', type:'image/jpeg' } as unknown as Blob);
+    return request<{ photoUpdatedAt: string }>(`/members/${id}/photo`, { method:'POST', body:form });
+  },
+  deleteMemberPhoto: (id: string) => request<{ id: string; photoUpdatedAt: null }>(`/members/${id}/photo`, { method:'DELETE' }),
   plans: () => request<Plan[]>('/plans'),
   createPlan: (input: { name: string; description?: string; price: number; durationDays: number }) => request<Plan>('/plans', { method: 'POST', body: JSON.stringify(input) }),
   updatePlan: (id: string, input: { name?: string; description?: string; price?: number; durationDays?: number; isActive?: boolean }) => request<Plan>(`/plans/${id}`, { method: 'PATCH', body: JSON.stringify(input) }),

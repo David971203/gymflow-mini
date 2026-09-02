@@ -1,9 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, AppState, BackHandler, Easing, FlatList, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, useColorScheme, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, AppState, BackHandler, Easing, FlatList, Image, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, useColorScheme, View } from 'react-native';
 import * as Network from 'expo-network';
+import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import type { NotificationResponse } from 'expo-notifications';
 import * as SecureStore from 'expo-secure-store';
-import { Directory } from 'expo-file-system';
+import { Directory, File } from 'expo-file-system';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -703,7 +705,7 @@ function MembersScreen({ scope, revision, initialFilter }: ScreenProps & { initi
         <SectionTitle title={query ? `${visibleMembers.length} resultado${visibleMembers.length === 1 ? '' : 's'}` : `${visibleMembers.length} miembro${visibleMembers.length === 1 ? '' : 's'}`} subtitle={memberFilter === 'EXPIRED' ? 'Miembros activos sin una membresía vigente' : memberFilter === 'UPCOMING' ? 'Membresías que vencen en los próximos 10 días' : query ? `Búsqueda dentro del filtro seleccionado` : "Toca un miembro para ver sus opciones"} />
       </>}
       renderItem={({ item:member }) => { const current = editableMembership(member) ?? member.memberships[0]; const currentStatus=current ? effectiveMembershipStatus(current) : undefined; const expiring=upcomingMembership(member); return <Pressable accessibilityRole="button" accessibilityLabel={`Opciones de ${member.firstName} ${member.lastName}`} onPress={() => setSelected(member)} style={({pressed}) => [styles.memberRow, styles.memberListRow, pressed && styles.memberRowPressed]}>
-        <View style={styles.memberAvatar}><Text style={styles.memberAvatarText}>{member.firstName[0]}{member.lastName[0]}</Text></View><View style={styles.rowMain}><Text numberOfLines={1} ellipsizeMode="tail" maxFontSizeMultiplier={1.35} style={styles.rowTitle}>{member.firstName} {member.lastName}</Text><Text numberOfLines={1} ellipsizeMode="tail" maxFontSizeMultiplier={1.3} style={styles.rowSubtitle}>{member.code ? `Código ${member.code} · ` : ''}CI {member.ci}</Text><View style={styles.memberPlanLine}><View style={[styles.memberPlanDot, currentStatus === 'ACTIVE' && styles.memberPlanDotActive, expiring&&styles.memberPlanDotUpcoming, currentStatus === 'EXPIRED' && styles.memberPlanDotExpired]}/><Text numberOfLines={1} ellipsizeMode="tail" maxFontSizeMultiplier={1.3} style={[styles.memberPlanText,expiring&&styles.memberPlanTextUpcoming,currentStatus === 'EXPIRED'&&styles.memberPlanTextExpired]}>{current ? expiring ? `${contractedPlan(current).name} · vence ${formatDate(current.endDate)}` : `${contractedPlan(current).name} · ${membershipStatusLabel(currentStatus!)}` : 'Sin plan asignado'}</Text></View></View><Ionicons name="chevron-forward" size={22} color={activeDarkTheme ? darkPalette.secondary : palette.secondary}/>
+        <MemberPhotoAvatar member={member}/><View style={styles.rowMain}><Text numberOfLines={1} ellipsizeMode="tail" maxFontSizeMultiplier={1.35} style={styles.rowTitle}>{member.firstName} {member.lastName}</Text><Text numberOfLines={1} ellipsizeMode="tail" maxFontSizeMultiplier={1.3} style={styles.rowSubtitle}>{member.code ? `Código ${member.code} · ` : ''}CI {member.ci}</Text><View style={styles.memberPlanLine}><View style={[styles.memberPlanDot, currentStatus === 'ACTIVE' && styles.memberPlanDotActive, expiring&&styles.memberPlanDotUpcoming, currentStatus === 'EXPIRED' && styles.memberPlanDotExpired]}/><Text numberOfLines={1} ellipsizeMode="tail" maxFontSizeMultiplier={1.3} style={[styles.memberPlanText,expiring&&styles.memberPlanTextUpcoming,currentStatus === 'EXPIRED'&&styles.memberPlanTextExpired]}>{current ? expiring ? `${contractedPlan(current).name} · vence ${formatDate(current.endDate)}` : `${contractedPlan(current).name} · ${membershipStatusLabel(currentStatus!)}` : 'Sin plan asignado'}</Text></View></View><Ionicons name="chevron-forward" size={22} color={activeDarkTheme ? darkPalette.secondary : palette.secondary}/>
       </Pressable>; }}
       ListEmptyComponent={loading ? <LoadingSkeleton/> : <View style={styles.card}><Empty text={query ? "No se encontraron miembros" : memberFilter === 'UPCOMING' ? "No hay membresías próximas a vencer" : memberFilter === 'EXPIRED' ? "No hay membresías vencidas" : memberFilter === 'INACTIVE' ? "No hay miembros inactivos" : memberFilter === 'ACTIVE' ? "No hay miembros activos" : "Registra tu primer miembro"} /></View>}
     />
@@ -722,7 +724,7 @@ function MemberActions({ member, onClose, onEdit, onPlan, onRenew, onEditSchedul
   const fullName = member ? `${member.firstName} ${member.lastName}` : 'Opciones del miembro';
   return <Sheet open={!!member} title={fullName} onClose={onClose}>
     <View style={styles.memberProfile}>
-      <View style={styles.memberProfileAvatar}><Text style={styles.memberProfileInitials}>{member ? `${member.firstName[0]}${member.lastName[0]}` : ''}</Text></View>
+      {member ? <MemberPhotoAvatar member={member} profile/> : <View style={styles.memberProfileAvatar}/>}
       <View style={styles.rowMain}><Text numberOfLines={2} ellipsizeMode="tail" maxFontSizeMultiplier={1.35} style={styles.memberProfileName}>{fullName}</Text><Text numberOfLines={1} ellipsizeMode="tail" style={styles.memberProfileMeta}>CI {member?.ci}{member?.phone ? ` · ${member.phone}` : ''}</Text><Text numberOfLines={2} ellipsizeMode="tail" maxFontSizeMultiplier={1.3} style={[styles.memberProfilePlan,membership&&effectiveMembershipStatus(membership)==='EXPIRED'&&styles.memberPlanTextExpired]}>{membership ? `${contractedPlan(membership).name} · ${membershipStatusLabel(effectiveMembershipStatus(membership))}` : 'Sin membresía vigente'}</Text>{active?<Text style={styles.memberProfileExpiry}>Vence el {formatDate(active.endDate)} · {remainingDaysLabel(active.endDate)}</Text>:null}</View>
     </View>
     {SHOW_SCHEDULED_MEMBERSHIP_UI&&scheduled?<View style={styles.scheduledMembershipCard}>
@@ -804,9 +806,18 @@ function PaymentsScreen({ scope, revision }: ScreenProps) {
   /><PaymentForm scope={scope} payment={selected} onClose={() => setSelected(null)} onSaved={() => { setSelected(null); load(); }} /></>;
 }
 
+async function prepareMemberPhoto(uri: string) {
+  for (const compress of [0.72, 0.55, 0.4]) {
+    const result = await ImageManipulator.manipulateAsync(uri, [{ resize:{ width:512, height:512 } }], { compress, format:ImageManipulator.SaveFormat.JPEG });
+    if ((new File(result.uri).size ?? Number.MAX_SAFE_INTEGER) <= 240 * 1024) return result.uri;
+  }
+  throw new Error('No fue posible reducir la foto por debajo de 250 KB');
+}
+
 function MemberForm({ scope, open, member, plans, onClose, onSaved }: FormProps & { member: Member | null; plans: Plan[] }) {
   const [ci, setCi] = useState(''); const [code, setCode] = useState(''); const [firstName, setFirstName] = useState(''); const [lastName, setLastName] = useState(''); const [age, setAge] = useState(''); const [sex, setSex] = useState<MemberSex | ''>(''); const [phone, setPhone] = useState(''); const [address, setAddress] = useState(''); const [status, setStatus] = useState('ACTIVE'); const [saving, setSaving] = useState(false);
   const [page, setPage] = useState(0); const [planId, setPlanId] = useState(''); const [periodCount, setPeriodCount] = useState(1); const [initialPayment, setInitialPayment] = useState('');
+  const [photoUri, setPhotoUri] = useState<string | null>(null); const [removePhoto, setRemovePhoto] = useState(false); const [preparingPhoto, setPreparingPhoto] = useState(false);
   const keyboardOpen = useKeyboardOpen();
   const scrollRef = useRef<ScrollView>(null);
   const revealFocusedInput = useRevealFocusedInput(scrollRef, 120);
@@ -814,8 +825,27 @@ function MemberForm({ scope, open, member, plans, onClose, onSaved }: FormProps 
   const selectedInitialPlan = availablePlans.find(plan => plan.id === planId);
   const initialEndDate = selectedInitialPlan ? addDays(new Date().toISOString(), selectedInitialPlan.durationDays * periodCount) : undefined;
   const totalPages = member ? 4 : 5;
-  useEffect(() => { if (!open) return; setPage(0); setPlanId(''); setPeriodCount(1); setInitialPayment(''); setCi(member?.ci ?? ''); setCode(member?.code ?? ''); setFirstName(member?.firstName ?? ''); setLastName(member?.lastName ?? ''); setAge(member?.age ? String(member.age) : ''); setSex(member?.sex ?? ''); setPhone(member?.phone ?? ''); setAddress(member?.address ?? ''); setStatus(member?.status ?? 'ACTIVE'); }, [open, member]);
-  const save = async () => { setSaving(true); try { ensureActiveSubscription(); const input = { ci, code: code.trim() || null, firstName: firstName.trim(), lastName: lastName.trim(), age: age ? Number(age) : null, sex: sex || null, phone: phone.trim(), address: address.trim() }; if (member) await offline.updateMember(scope, member.id, { ...input, status }); else { if (!planId) throw new Error('Selecciona el plan inicial'); await offline.createMember(scope, input); await syncNow(scope); const createdMember=(await offline.members(scope)).find(item => item.ci === ci); if (!createdMember) throw new Error('No se pudo encontrar el miembro recién creado'); await offline.assignPlan(scope, { memberId:createdMember.id, planId, periodCount, ...(Number(initialPayment)>0?{initialPayment:Number(initialPayment),paymentMethod:'CASH'}:{}) }); } Keyboard.dismiss(); showSuccess(member ? 'Datos del miembro actualizados.' : 'Miembro y membresía registrados.'); onSaved(); } catch (error) { showError(error); } finally { setSaving(false); } };
+  useEffect(() => { if (!open) return; setPage(0); setPlanId(''); setPeriodCount(1); setInitialPayment(''); setPhotoUri(null); setRemovePhoto(false); setCi(member?.ci ?? ''); setCode(member?.code ?? ''); setFirstName(member?.firstName ?? ''); setLastName(member?.lastName ?? ''); setAge(member?.age ? String(member.age) : ''); setSex(member?.sex ?? ''); setPhone(member?.phone ?? ''); setAddress(member?.address ?? ''); setStatus(member?.status ?? 'ACTIVE'); }, [open, member]);
+  const choosePhoto = async (source: 'CAMERA' | 'LIBRARY') => {
+    setPreparingPhoto(true);
+    try {
+      const permission = source === 'CAMERA' ? await ImagePicker.requestCameraPermissionsAsync() : await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) throw new Error(source === 'CAMERA' ? 'Autoriza el acceso a la cámara para tomar la foto' : 'Autoriza el acceso a tus fotos para seleccionar una imagen');
+      const result = source === 'CAMERA'
+        ? await ImagePicker.launchCameraAsync({ mediaTypes:['images'], allowsEditing:true, aspect:[1,1], quality:1 })
+        : await ImagePicker.launchImageLibraryAsync({ mediaTypes:['images'], allowsEditing:true, aspect:[1,1], quality:1 });
+      if (result.canceled || !result.assets[0]?.uri) return;
+      setPhotoUri(await prepareMemberPhoto(result.assets[0].uri));
+      setRemovePhoto(false);
+    } catch (error) { showError(error); } finally { setPreparingPhoto(false); }
+  };
+  const photoOptions = () => Alert.alert('Foto del miembro', 'La imagen se recortará en formato cuadrado y se reducirá antes de subirla.', [
+    { text:'Tomar foto', onPress:() => { void choosePhoto('CAMERA'); } },
+    { text:'Elegir de la galería', onPress:() => { void choosePhoto('LIBRARY'); } },
+    ...(photoUri || (member?.photoUpdatedAt && !removePhoto) ? [{ text:'Eliminar foto', style:'destructive' as const, onPress:() => { setPhotoUri(null); setRemovePhoto(!!member?.photoUpdatedAt); } }] : []),
+    { text:'Cancelar', style:'cancel' as const },
+  ]);
+  const save = async () => { setSaving(true); try { ensureActiveSubscription(); const photoChanged=!!photoUri||removePhoto; if(photoChanged&&!await hasInternetConnection()) throw new Error('Conéctate a internet para guardar la foto del miembro'); const input = { ci, code: code.trim() || null, firstName: firstName.trim(), lastName: lastName.trim(), age: age ? Number(age) : null, sex: sex || null, phone: phone.trim(), address: address.trim() }; let targetId=member?.id; if (member) await offline.updateMember(scope, member.id, { ...input, status }); else { if (!planId) throw new Error('Selecciona el plan inicial'); targetId=await offline.createMember(scope, input); await syncNow(scope); await offline.assignPlan(scope, { memberId:targetId, planId, periodCount, ...(Number(initialPayment)>0?{initialPayment:Number(initialPayment),paymentMethod:'CASH'}:{}) }); } if(targetId&&photoUri){await syncNow(scope);await api.uploadMemberPhoto(targetId,photoUri);}else if(targetId&&removePhoto&&member?.photoUpdatedAt){await api.deleteMemberPhoto(targetId);} if(photoChanged)await syncNow(scope); Keyboard.dismiss(); showSuccess(member ? 'Datos del miembro actualizados.' : 'Miembro y membresía registrados.'); onSaved(); } catch (error) { showError(error); } finally { setSaving(false); } };
   const validAge = !age || (Number.isInteger(Number(age)) && Number(age) >= 1 && Number(age) <= 120);
   const pageValid = [!!firstName.trim() && !!lastName.trim(), ci.length === 11, validAge, true, !!planId][page];
   const pageTitles = ['Datos personales', 'Identificación', 'Información adicional', 'Contacto y estado', 'Plan inicial'];
@@ -830,7 +860,7 @@ function MemberForm({ scope, open, member, plans, onClose, onSaved }: FormProps 
     <View style={styles.memberFormHeader}><View style={styles.memberFormHeaderRow}><Pressable accessibilityRole="button" accessibilityLabel={page > 0 ? 'Paso anterior' : 'Volver a miembros'} onPress={goBack} style={({pressed}) => [styles.memberFormBack, pressed && styles.tabPressed]}><Ionicons name="arrow-back" size={19} color={activeDarkTheme ? darkPalette.text : palette.ink}/><Text style={styles.memberFormBackText}>{page > 0 ? 'Atrás' : 'Volver'}</Text></Pressable><Text style={styles.memberFormStep}>PASO {page + 1} DE {totalPages}</Text><Pressable accessibilityRole="button" disabled={!pageValid || saving} onPress={goForward} style={[styles.memberFormNext, (!pageValid || saving) && styles.disabled]}><Text style={styles.memberFormNextText}>{page === totalPages - 1 ? saving ? 'Guardando…' : 'Guardar' : 'Siguiente'}</Text><Ionicons name={page === totalPages - 1 ? 'checkmark' : 'arrow-forward'} size={16} color={palette.white}/></Pressable></View><View style={styles.memberFormProgress}>{Array.from({length:totalPages},(_,step) => <View key={step} style={[styles.memberFormProgressPart, step <= page && styles.memberFormProgressPartActive]}/>)}</View><Text style={styles.memberFormTitle}>{pageTitles[page]}</Text><Text style={styles.memberFormCopy}>{member ? 'Editando los datos del miembro.' : page === 4 ? 'Selecciona obligatoriamente la membresía inicial.' : 'Registrando un nuevo miembro.'}</Text></View>
     <ScrollView ref={scrollRef} key={page} style={styles.memberFormScroll} contentContainerStyle={[styles.memberFormContent, keyboardOpen && styles.memberFormContentKeyboard]} keyboardShouldPersistTaps="handled" keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'} showsVerticalScrollIndicator={keyboardOpen}>
       <KeyboardScrollContext.Provider value={revealFocusedInput}>
-      {page === 0 ? <><Field label="Nombre" value={firstName} onChangeText={setFirstName} /><Field label="Apellidos" value={lastName} onChangeText={setLastName} /></> : null}
+      {page === 0 ? <><View style={styles.memberPhotoEditor}><View style={styles.memberPhotoEditorAvatar}>{photoUri ? <Image source={{uri:photoUri}} resizeMode="cover" style={styles.memberAvatarImage}/> : member && !removePhoto ? <MemberPhotoAvatar member={member} editor/> : <Text style={styles.memberPhotoEditorInitials}>{firstName[0] ?? ''}{lastName[0] ?? ''}</Text>}</View><View style={styles.memberPhotoEditorContent}><Text style={styles.memberPhotoEditorTitle}>Foto del miembro</Text><Text style={styles.memberPhotoEditorCopy}>Cuadrada · 512 × 512 px · máximo 250 KB</Text><Pressable accessibilityRole="button" disabled={preparingPhoto} onPress={photoOptions} style={({pressed})=>[styles.memberPhotoEditorButton,preparingPhoto&&styles.disabled,pressed&&styles.tabPressed]}>{preparingPhoto?<ActivityIndicator size="small" color={palette.action}/>:<Ionicons name="camera-outline" size={17} color={palette.action}/>}<Text style={styles.memberPhotoEditorButtonText}>{preparingPhoto?'Preparando…':photoUri||(member?.photoUpdatedAt&&!removePhoto)?'Cambiar foto':'Añadir foto'}</Text></Pressable></View></View><Field label="Nombre" value={firstName} onChangeText={setFirstName} /><Field label="Apellidos" value={lastName} onChangeText={setLastName} /></> : null}
       {page === 1 ? <><Field label="Carnet de identidad (11 dígitos)" value={ci} onChangeText={(value) => setCi(value.replace(/\D/g, '').slice(0, 11))} keyboardType="number-pad" maxLength={11} /><Field label="Código interno (opcional)" value={code} onChangeText={(value) => setCode(value.slice(0, 40))} maxLength={40} /></> : null}
       {page === 2 ? <><Field label="Edad (opcional)" value={age} onChangeText={(value) => setAge(value.replace(/\D/g, '').slice(0, 3))} keyboardType="number-pad" maxLength={3} /><Text style={styles.fieldLabel}>Sexo (opcional)</Text><View style={styles.statusChoices}>{([['MALE','Masculino'],['FEMALE','Femenino'],['OTHER','Otro']] as Array<[MemberSex,string]>).map(([value,label]) => <Pressable key={value} onPress={() => setSex(sex === value ? '' : value)} style={[styles.statusChoice, sex === value && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, sex === value && styles.statusChoiceTextActive]}>{label}</Text></Pressable>)}</View></> : null}
       {page === 3 ? <><Field label="Teléfono" value={phone} onChangeText={setPhone} keyboardType="phone-pad" /><Field label="Dirección" value={address} onChangeText={setAddress} />{member && <><Text style={styles.fieldLabel}>Estado</Text><View style={styles.statusChoices}><Pressable onPress={() => setStatus('ACTIVE')} style={[styles.statusChoice, status === 'ACTIVE' && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, status === 'ACTIVE' && styles.statusChoiceTextActive]}>Activo</Text></Pressable><Pressable onPress={() => setStatus('INACTIVE')} style={[styles.statusChoice, status === 'INACTIVE' && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, status === 'INACTIVE' && styles.statusChoiceTextActive]}>Inactivo</Text></Pressable></View></>}</> : null}
@@ -1027,6 +1057,18 @@ function Metric({ label, value, wide }: { label: string; value: string | number;
 function SectionTitle({ title, subtitle }: { title: string; subtitle: string }) { return <View style={styles.sectionTitle}><Text style={styles.sectionHeading}>{title}</Text><Text style={styles.sectionCopy}>{subtitle}</Text></View>; }
 function Row({ title, subtitle, value }: { title: string; subtitle: string; value: string }) { return <View style={styles.paymentRow}><View style={styles.rowMain}><Text numberOfLines={1} ellipsizeMode="tail" maxFontSizeMultiplier={1.35} style={styles.rowTitle}>{title}</Text><Text maxFontSizeMultiplier={1.3} style={styles.rowSubtitle}>{subtitle}</Text></View><Text numberOfLines={1} adjustsFontSizeToFit maxFontSizeMultiplier={1.25} style={styles.income}>{value}</Text></View>; }
 function Empty({ text }: { text: string }) { return <Text style={styles.empty}>{text}</Text>; }
+function MemberPhotoAvatar({ member, profile = false, editor = false }: { member: Member; profile?: boolean; editor?: boolean }) {
+  const [source, setSource] = useState<Awaited<ReturnType<typeof api.memberPhotoSource>> | null>(null);
+  useEffect(() => {
+    let active = true;
+    if (!member.photoUpdatedAt) { setSource(null); return () => { active = false; }; }
+    void api.memberPhotoSource(member).then((next) => { if (active) setSource(next); }).catch(() => { if (active) setSource(null); });
+    return () => { active = false; };
+  }, [member.id, member.photoUpdatedAt]);
+  const containerStyle = editor ? styles.memberPhotoEditorAvatar : profile ? styles.memberProfileAvatar : styles.memberAvatar;
+  const textStyle = editor ? styles.memberPhotoEditorInitials : profile ? styles.memberProfileInitials : styles.memberAvatarText;
+  return <View style={containerStyle}>{source ? <Image source={source} onError={() => setSource(null)} resizeMode="cover" style={styles.memberAvatarImage}/> : <Text style={textStyle}>{member.firstName[0]}{member.lastName[0]}</Text>}</View>;
+}
 function showError(error: unknown) { publishErrorToast(error instanceof Error ? error.message : typeof error === 'string' ? error : 'Ocurrió un error'); }
 function showSuccess(message: string) { publishToast(message, 'success'); }
 function showPending(message: string) { publishToast(message, 'warning'); }
@@ -1097,6 +1139,15 @@ const baseStyles = StyleSheet.create(withReadableType({
   periodStepper:{height:58,marginBottom:16,padding:5,flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:palette.line,borderRadius:13,backgroundColor:'#fbfcfb'},periodStepButton:{width:48,height:48,alignItems:'center',justifyContent:'center',borderRadius:10,backgroundColor:'#e8f5ce'},periodStepValue:{flex:1,alignItems:'center',justifyContent:'center'},periodStepNumber:{color:palette.ink,fontSize:18,fontWeight:'900'},periodStepCaption:{marginTop:1,color:palette.secondary,fontSize:10,fontWeight:'900',letterSpacing:.8},purchasePreview:{marginBottom:16,padding:14,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:14,borderWidth:1,borderColor:'#cfe3d6',borderRadius:13,backgroundColor:'#f4faf6'},purchasePreviewLabel:{color:palette.secondary,fontSize:10,fontWeight:'900',letterSpacing:.8},purchasePreviewValue:{marginTop:5,color:palette.action,fontSize:16,fontWeight:'900'},purchasePreviewMeta:{marginTop:3,color:palette.secondary,fontSize:11,fontWeight:'700'},purchasePreviewDate:{marginTop:5,color:palette.ink,fontSize:12,fontWeight:'900',textAlign:'right'},
   passwordInputShell:{minHeight:48,paddingLeft:14,paddingRight:2,flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:palette.line,borderRadius:11,backgroundColor:'#fafbf9'},passwordInput:{minHeight:46,flex:1,color:palette.ink,fontSize:14},passwordVisibilityButton:{width:44,height:44,alignItems:'center',justifyContent:'center',borderRadius:10},
   skeletonList:{gap:10},skeletonRow:{minHeight:80,padding:14,flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:palette.line,borderRadius:16,backgroundColor:palette.white},skeletonAvatar:{width:48,height:48,marginRight:12,borderRadius:15,backgroundColor:'#dce5df'},skeletonBody:{flex:1,gap:8},skeletonTitle:{width:'68%',height:14,borderRadius:7,backgroundColor:'#dce5df'},skeletonCopy:{width:'88%',height:10,borderRadius:5,backgroundColor:'#e5ebe7'},skeletonCopyShort:{width:'52%',height:10,borderRadius:5,backgroundColor:'#e5ebe7'},
+  memberPhotoEditor:{marginBottom:18,padding:14,flexDirection:'row',alignItems:'center',gap:14,borderWidth:1,borderColor:palette.line,borderRadius:17,backgroundColor:palette.white},
+  memberPhotoEditorAvatar:{width:88,height:88,overflow:'hidden',alignItems:'center',justifyContent:'center',borderRadius:26,backgroundColor:'#e8f5ce'},
+  memberPhotoEditorInitials:{color:palette.brand,fontSize:24,fontWeight:'900'},
+  memberPhotoEditorContent:{flex:1},
+  memberPhotoEditorTitle:{color:palette.ink,fontSize:14,fontWeight:'900'},
+  memberPhotoEditorCopy:{marginTop:4,color:palette.secondary,fontSize:9,lineHeight:14},
+  memberPhotoEditorButton:{minHeight:42,marginTop:10,paddingHorizontal:12,alignSelf:'flex-start',flexDirection:'row',alignItems:'center',justifyContent:'center',gap:6,borderWidth:1,borderColor:'#cfe3d6',borderRadius:11,backgroundColor:'#f4faf6'},
+  memberPhotoEditorButtonText:{color:palette.action,fontSize:11,fontWeight:'900'},
+  memberAvatarImage:{...StyleSheet.absoluteFillObject,width:'100%',height:'100%',borderRadius:26},
 }));
 
 const darkPalette = {
@@ -1388,6 +1439,13 @@ const darkStyles = StyleSheet.create({
   skeletonTitle:{backgroundColor:'#354039'},
   skeletonCopy:{backgroundColor:'#2c352f'},
   skeletonCopyShort:{backgroundColor:'#2c352f'},
+  memberPhotoEditor:{borderColor:darkPalette.border,backgroundColor:darkPalette.surface},
+  memberPhotoEditorAvatar:{backgroundColor:darkPalette.actionSoft},
+  memberPhotoEditorInitials:{color:palette.accent},
+  memberPhotoEditorTitle:{color:darkPalette.text},
+  memberPhotoEditorCopy:{color:darkPalette.secondary},
+  memberPhotoEditorButton:{borderColor:darkPalette.border,backgroundColor:darkPalette.raised},
+  memberPhotoEditorButtonText:{color:darkPalette.action},
 });
 
 const styles = new Proxy(baseStyles, {

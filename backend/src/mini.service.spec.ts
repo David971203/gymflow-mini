@@ -428,4 +428,38 @@ describe('MiniService', () => {
     await expect(service.removeGymSubscription('gym-1')).resolves.toMatchObject({ subscriptionPlan:null, subscriptionEndsAt:null });
     expect(update).toHaveBeenCalledWith({ where:{ id:'gym-1' }, data:{ subscriptionPlan:null, subscriptionStartedAt:null, subscriptionEndsAt:null } });
   });
+
+  it('guarda una foto JPEG comprimida en el miembro autenticado', async () => {
+    const upsert = jest.fn().mockResolvedValue({ memberId:'member-1' });
+    const update = jest.fn().mockResolvedValue({ id:'member-1' });
+    const prisma = {
+      member:{ findFirst:jest.fn().mockResolvedValue({ id:'member-1', gymId:'gym-1' }), update },
+      memberPhoto:{ upsert },
+      $transaction:jest.fn().mockResolvedValue([]),
+    };
+    const service = new MiniService(prisma as never);
+    const buffer = Buffer.from([0xff,0xd8,0xff,0x01]);
+
+    await expect(service.saveMemberPhoto('member-1', { buffer, size:buffer.length, mimetype:'image/jpeg' } as Express.Multer.File, user)).resolves.toHaveProperty('photoUpdatedAt');
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({ where:{ memberId:'member-1' }, create:expect.objectContaining({ gymId:'gym-1', data:buffer }) }));
+  });
+
+  it('rechaza archivos que declaran JPEG pero no contienen una imagen JPEG', async () => {
+    const service = new MiniService({ member:{ findFirst:jest.fn().mockResolvedValue({ id:'member-1', gymId:'gym-1' }) } } as never);
+    const buffer = Buffer.from('archivo falso');
+
+    await expect(service.saveMemberPhoto('member-1', { buffer, size:buffer.length, mimetype:'image/jpeg' } as Express.Multer.File, user)).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('elimina la foto sin borrar al miembro', async () => {
+    const deleteMany = jest.fn(); const update = jest.fn();
+    const service = new MiniService({
+      member:{ findFirst:jest.fn().mockResolvedValue({ id:'member-1', gymId:'gym-1' }), update },
+      memberPhoto:{ deleteMany },
+      $transaction:jest.fn().mockResolvedValue([]),
+    } as never);
+
+    await expect(service.deleteMemberPhoto('member-1', user)).resolves.toEqual({ id:'member-1', photoUpdatedAt:null });
+    expect(deleteMany).toHaveBeenCalledWith({ where:{ memberId:'member-1', gymId:'gym-1' } });
+  });
 });

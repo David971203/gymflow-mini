@@ -268,6 +268,7 @@ describe('MiniService', () => {
         findMany:jest.fn().mockResolvedValue([{ id:'membership-active' }, { id:'membership-scheduled' }]),
       },
       payment: { count:jest.fn().mockResolvedValue(2) },
+      attendance: { count:jest.fn().mockResolvedValue(0) },
       $transaction:jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
     };
     const service = new MiniService(prisma as never);
@@ -295,6 +296,7 @@ describe('MiniService', () => {
       member: { findFirst: jest.fn().mockResolvedValue({ id: 'member-1' }), delete: remove },
       membership: { count: jest.fn().mockResolvedValue(0) },
       payment: { count: jest.fn().mockResolvedValue(0) },
+      attendance: { count: jest.fn().mockResolvedValue(0) },
     };
     const service = new MiniService(prisma as never);
     await expect(service.deleteGymMember('gym-1', 'member-1')).resolves.toEqual({ id: 'member-1', disposition: 'DELETED' });
@@ -425,5 +427,39 @@ describe('MiniService', () => {
     const service = new MiniService({ gym:{ findUnique:jest.fn().mockResolvedValue({ id:'gym-1' }), update } } as never);
     await expect(service.removeGymSubscription('gym-1')).resolves.toMatchObject({ subscriptionPlan:null, subscriptionEndsAt:null });
     expect(update).toHaveBeenCalledWith({ where:{ id:'gym-1' }, data:{ subscriptionPlan:null, subscriptionStartedAt:null, subscriptionEndsAt:null } });
+  });
+
+  it('guarda una foto JPEG comprimida en el miembro autenticado', async () => {
+    const upsert = jest.fn().mockResolvedValue({ memberId:'member-1' });
+    const update = jest.fn().mockResolvedValue({ id:'member-1' });
+    const prisma = {
+      member:{ findFirst:jest.fn().mockResolvedValue({ id:'member-1', gymId:'gym-1' }), update },
+      memberPhoto:{ upsert },
+      $transaction:jest.fn().mockResolvedValue([]),
+    };
+    const service = new MiniService(prisma as never);
+    const buffer = Buffer.from([0xff,0xd8,0xff,0x01]);
+
+    await expect(service.saveMemberPhoto('member-1', { buffer, size:buffer.length, mimetype:'image/jpeg' } as Express.Multer.File, user)).resolves.toHaveProperty('photoUpdatedAt');
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({ where:{ memberId:'member-1' }, create:expect.objectContaining({ gymId:'gym-1', data:buffer }) }));
+  });
+
+  it('rechaza archivos que declaran JPEG pero no contienen una imagen JPEG', async () => {
+    const service = new MiniService({ member:{ findFirst:jest.fn().mockResolvedValue({ id:'member-1', gymId:'gym-1' }) } } as never);
+    const buffer = Buffer.from('archivo falso');
+
+    await expect(service.saveMemberPhoto('member-1', { buffer, size:buffer.length, mimetype:'image/jpeg' } as Express.Multer.File, user)).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('elimina la foto sin borrar al miembro', async () => {
+    const deleteMany = jest.fn(); const update = jest.fn();
+    const service = new MiniService({
+      member:{ findFirst:jest.fn().mockResolvedValue({ id:'member-1', gymId:'gym-1' }), update },
+      memberPhoto:{ deleteMany },
+      $transaction:jest.fn().mockResolvedValue([]),
+    } as never);
+
+    await expect(service.deleteMemberPhoto('member-1', user)).resolves.toEqual({ id:'member-1', photoUpdatedAt:null });
+    expect(deleteMany).toHaveBeenCalledWith({ where:{ memberId:'member-1', gymId:'gym-1' } });
   });
 });

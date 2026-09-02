@@ -1,11 +1,12 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { GymSubscriptionPlan, Prisma, SubscriptionRequestStatus, UserRole } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'crypto';
 import { PrismaService } from './prisma.service';
-import { ChangePasswordDto, ForgotPasswordDto, LoginDto, RegisterDto, ResetPasswordDto, SelectSubscriptionDto } from './auth.dto';
+import { ChangePasswordDto, ForgotPasswordDto, GoogleLoginDto, LoginDto, RegisterDto, ResendEmailVerificationDto, ResetPasswordDto, SelectSubscriptionDto, VerifyEmailDto } from './auth.dto';
 import type { AuthUser } from './common';
+import { GoogleIdentityService } from './google-identity.service';
 import { MailService } from './mail.service';
 
 const PLATFORM_SUBSCRIPTION_PRICES: Record<GymSubscriptionPlan, number> = {
@@ -16,7 +17,7 @@ const PLATFORM_SUBSCRIPTION_PRICES: Record<GymSubscriptionPlan, number> = {
 
 @Injectable()
 export class AuthService {
-  constructor(private readonly prisma: PrismaService, private readonly jwt: JwtService, private readonly mail: MailService) {}
+  constructor(private readonly prisma: PrismaService, private readonly jwt: JwtService, private readonly mail: MailService, private readonly googleIdentity?: GoogleIdentityService) {}
 
   private normalizePhone(value: string) {
     let phone = value.replace(/\D/g, '');
@@ -31,6 +32,35 @@ export class AuthService {
 
   private resetCodeHash(userId: string, code: string) {
     return createHmac('sha256', process.env.JWT_SECRET ?? 'local').update(`${userId}:${code}`).digest('hex');
+  }
+
+  private emailVerificationCodeHash(userId: string, code: string) {
+    return createHmac('sha256', process.env.JWT_SECRET ?? 'local').update(`verify-email:${userId}:${code}`).digest('hex');
+  }
+
+  private emailVerificationRequired() {
+    return process.env.NODE_ENV === 'production' || process.env.EMAIL_VERIFICATION_REQUIRED?.trim().toLowerCase() === 'true';
+  }
+
+  private async sendEmailVerificationCode(user: { id:string; email:string; name:string }) {
+    const response = { message:'Enviamos un código de verificación a tu correo.', retryAfterSeconds:60 };
+    const minuteAgo = new Date(Date.now() - 60_000);
+    const recent = await this.prisma.emailVerificationCode.findFirst({ where:{ userId:user.id, usedAt:null, createdAt:{ gte:minuteAgo } } });
+    if (recent) return response;
+    const code = randomInt(0, 1_000_000).toString().padStart(6, '0');
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 15 * 60_000);
+    const challenge = await this.prisma.$transaction(async tx => {
+      await tx.emailVerificationCode.updateMany({ where:{ userId:user.id, usedAt:null }, data:{ usedAt:now } });
+      return tx.emailVerificationCode.create({ data:{ userId:user.id, codeHash:this.emailVerificationCodeHash(user.id, code), expiresAt } });
+    });
+    try {
+      await this.mail.sendEmailVerificationCode({ to:user.email, name:user.name, code });
+    } catch (error) {
+      await this.prisma.emailVerificationCode.update({ where:{ id:challenge.id }, data:{ usedAt:new Date() } }).catch(() => undefined);
+      throw error;
+    }
+    return response;
   }
 
   private slug(name: string) {
@@ -64,6 +94,20 @@ export class AuthService {
     if (user.role === 'ADMIN' && (!user.gym || !user.gym.isActive)) {
       throw new UnauthorizedException('El gimnasio está inactivo');
     }
+    if (user.role === UserRole.ADMIN && this.emailVerificationRequired() && user.emailVerifiedAt === null) {
+      throw new ForbiddenException({ code:'EMAIL_NOT_VERIFIED', message:'Debes verificar tu correo antes de iniciar sesión' });
+    }
+    return this.session(user.id);
+  }
+
+  async googleLogin(dto: GoogleLoginDto) {
+    if (!this.googleIdentity) throw new UnauthorizedException('El acceso con Google no está disponible');
+    const email = await this.googleIdentity.verifiedEmail(dto.idToken);
+    const user = await this.prisma.user.findUnique({ where: { email }, include: { gym: true } });
+    if (!user) throw new UnauthorizedException('No existe una cuenta de GymFlow con este correo. Crea tu cuenta primero');
+    if (!user.isActive || user.role !== UserRole.ADMIN) throw new UnauthorizedException('Esta cuenta no puede acceder a la aplicación de administradores');
+    if (!user.gym || !user.gym.isActive) throw new UnauthorizedException('El gimnasio está inactivo');
+    if (user.emailVerifiedAt === null) await this.prisma.user.update({ where:{ id:user.id }, data:{ emailVerifiedAt:new Date() } });
     return this.session(user.id);
   }
 
@@ -71,11 +115,24 @@ export class AuthService {
     const email = dto.email.trim().toLowerCase();
     const phone = this.normalizePhone(dto.phone);
     const passwordHash = await argon2.hash(dto.password);
+    const verificationRequired = this.emailVerificationRequired();
     try {
       const user = await this.prisma.$transaction(async (tx) => {
         const gym = await tx.gym.create({ data: { name: dto.gymName.trim(), slug: this.slug(dto.gymName), province: dto.province?.trim() || null, phone, currency: 'CUP', isActive: true } });
-        return tx.user.create({ data: { email, phone, passwordHash, name: dto.ownerName.trim(), role: UserRole.ADMIN, gymId: gym.id } });
+        return tx.user.create({ data: { email, phone, passwordHash, name: dto.ownerName.trim(), role: UserRole.ADMIN, gymId: gym.id, emailVerifiedAt:verificationRequired ? null : new Date() } });
       });
+      if (verificationRequired) {
+        try {
+          const delivery = await this.sendEmailVerificationCode(user);
+          return { verificationRequired:true as const, email:user.email, ...delivery };
+        } catch (error) {
+          await this.prisma.$transaction(async tx => {
+            await tx.user.delete({ where:{ id:user.id } });
+            if (user.gymId) await tx.gym.delete({ where:{ id:user.gymId } });
+          }).catch(() => undefined);
+          throw error;
+        }
+      }
       return this.session(user.id);
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -84,6 +141,40 @@ export class AuthService {
       }
       throw error;
     }
+  }
+
+  async resendEmailVerification(dto: ResendEmailVerificationDto) {
+    const response = { message:'Si la cuenta está pendiente, enviaremos un nuevo código.', retryAfterSeconds:60 };
+    const user = await this.prisma.user.findUnique({ where:{ email:dto.email.trim().toLowerCase() }, select:{ id:true, email:true, name:true, isActive:true, emailVerifiedAt:true } });
+    if (!user?.isActive || user.emailVerifiedAt) return response;
+    await this.sendEmailVerificationCode(user);
+    return response;
+  }
+
+  async verifyEmail(dto: VerifyEmailDto) {
+    const invalid = new BadRequestException('El código es incorrecto, venció o ya fue utilizado');
+    const user = await this.prisma.user.findUnique({ where:{ email:dto.email.trim().toLowerCase() }, select:{ id:true, isActive:true, emailVerifiedAt:true } });
+    if (!user?.isActive) throw invalid;
+    if (user.emailVerifiedAt) return this.session(user.id);
+    const challenge = await this.prisma.emailVerificationCode.findFirst({ where:{ userId:user.id, usedAt:null }, orderBy:{ createdAt:'desc' } });
+    if (!challenge) throw invalid;
+    const now = new Date();
+    if (challenge.expiresAt.getTime() <= now.getTime() || challenge.attempts >= 5) {
+      await this.prisma.emailVerificationCode.update({ where:{ id:challenge.id }, data:{ usedAt:now } });
+      throw invalid;
+    }
+    const provided = Buffer.from(this.emailVerificationCodeHash(user.id, dto.code), 'hex');
+    const expected = Buffer.from(challenge.codeHash, 'hex');
+    if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
+      const attempts = challenge.attempts + 1;
+      await this.prisma.emailVerificationCode.update({ where:{ id:challenge.id }, data:{ attempts, ...(attempts >= 5 ? { usedAt:now } : {}) } });
+      throw invalid;
+    }
+    await this.prisma.$transaction(async tx => {
+      await tx.user.update({ where:{ id:user.id }, data:{ emailVerifiedAt:now } });
+      await tx.emailVerificationCode.updateMany({ where:{ userId:user.id, usedAt:null }, data:{ usedAt:now } });
+    });
+    return this.session(user.id);
   }
 
   async selectSubscription(user: AuthUser, dto: SelectSubscriptionDto) {

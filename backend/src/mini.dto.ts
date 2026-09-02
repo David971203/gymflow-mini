@@ -51,6 +51,7 @@ export class UpdateGymAdminDto {
 
 export class CreateMemberDto {
   @IsOptional() @IsUUID() clientId?: string;
+  @IsOptional() @IsUUID() qrCode?: string;
   @IsOptional() @IsDateString() occurredAt?: string;
   @IsString()
   @Matches(/^\d{11}$/, { message: 'El carnet de identidad debe contener exactamente 11 dígitos' })
@@ -152,6 +153,7 @@ export class ApplyPaymentDto {
 export const SYNC_OPERATION_TYPES = [
   'MEMBER_CREATE', 'MEMBER_UPDATE', 'MEMBER_DELETE', 'PLAN_CREATE', 'PLAN_UPDATE', 'PLAN_DELETE',
   'MEMBERSHIP_ASSIGN', 'MEMBERSHIP_UPDATE', 'MEMBERSHIP_RENEW', 'MEMBERSHIP_DELETE', 'PAYMENT_APPLY',
+  'ATTENDANCE_CHECK_IN', 'ATTENDANCE_CHECK_OUT',
 ] as const;
 
 export type SyncOperationType = (typeof SYNC_OPERATION_TYPES)[number];

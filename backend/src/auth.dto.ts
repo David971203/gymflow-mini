@@ -6,6 +6,10 @@ export class LoginDto {
   @IsString() @MinLength(8) password: string;
 }
 
+export class GoogleLoginDto {
+  @IsString() @MinLength(100) @MaxLength(4096) idToken: string;
+}
+
 export class RegisterDto {
   @IsString() @MaxLength(100) ownerName: string;
   @IsString() @MaxLength(100) gymName: string;
@@ -14,6 +18,15 @@ export class RegisterDto {
   @IsEmail() email: string;
   @IsString() @MinLength(8) password: string;
   @IsString() @MinLength(12) @MaxLength(200) deviceId: string;
+}
+
+export class VerifyEmailDto {
+  @IsEmail() email: string;
+  @IsString() @Matches(/^\d{6}$/, { message: 'El código debe contener 6 dígitos' }) code: string;
+}
+
+export class ResendEmailVerificationDto {
+  @IsEmail() email: string;
 }
 
 export class SelectSubscriptionDto {

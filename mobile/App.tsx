@@ -1,18 +1,21 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, AppState, BackHandler, Easing, FlatList, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, useColorScheme, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, AppState, BackHandler, Easing, FlatList, Image, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, TurboModuleRegistry, useColorScheme, View } from 'react-native';
 import * as Network from 'expo-network';
+import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import type { NotificationResponse } from 'expo-notifications';
 import * as SecureStore from 'expo-secure-store';
-import { Directory } from 'expo-file-system';
+import { Directory, File, Paths } from 'expo-file-system';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import writeExcelFile, { type SheetData } from 'write-excel-file/universal';
-import { api } from './src/api';
+import { api, ApiError } from './src/api';
 import { cancelMembershipNotifications, MEMBERSHIP_NOTIFICATION_SOURCE, supportsMembershipNotifications, syncMembershipNotifications } from './src/notifications';
 import { discardSyncIssue, getSyncIssues, getSyncState, initializeOffline, offline, subscribeOffline, syncNow } from './src/offline';
 import { getTrustedClockStatus, persistTrustedClock, SUBSCRIPTION_VALIDATION_MESSAGE } from './src/trustedClock';
 import { calculateGymStatistics, type StatisticBar } from './src/statistics';
+import { AttendanceScreen } from './src/AttendanceScreen';
 import type { Currency, Dashboard, GymSubscriptionPlan, Member, Membership, MemberSex, Payment, Plan, SyncIssue, SyncState, Tab, User } from './src/types';
 
 let activeCurrency: Currency = 'CUP';
@@ -20,6 +23,13 @@ let activeSubscriptionEndsAt = '';
 let activeSubscriptionScope = '';
 let activeSubscriptionTrialDays = 7;
 const renewalMessage = 'Para continuar debes renovar la membresía de tu gimnasio.';
+const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID?.trim() ?? '';
+const googleIosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID?.trim() ?? '';
+const googleSignin = TurboModuleRegistry.get('RNGoogleSignin')
+  ? (require('@react-native-google-signin/google-signin') as typeof import('@react-native-google-signin/google-signin')).GoogleSignin
+  : null;
+const googleLoginAvailable = Boolean(googleSignin && googleWebClientId);
+const appVersion = (require('./app.json') as { expo: { version:string } }).expo.version;
 const configuredRenewalWhatsApp = (process.env.EXPO_PUBLIC_RENEWAL_WHATSAPP ?? '').replace(/\D/g,'');
 const renewalWhatsApp = configuredRenewalWhatsApp.length === 8 ? `53${configuredRenewalWhatsApp}` : configuredRenewalWhatsApp;
 const money = (value: number | string) => `${Number(value).toLocaleString('es-CU', { maximumFractionDigits: 2 })} ${activeCurrency}`;
@@ -149,12 +159,12 @@ const tabs: { id: Tab; icon: TabIconName; activeIcon: TabIconName; label: string
   { id:'PLANES', icon:'pricetags-outline', activeIcon:'pricetags', label:'Planes' },
   { id:'CAJA', icon:'cash-outline', activeIcon:'cash', label:'Caja' },
   { id:'ESTADISTICAS', icon:'stats-chart-outline', activeIcon:'stats-chart', label:'Datos', title:'Estadísticas' },
-  { id:'CUENTA', icon:'person-circle-outline', activeIcon:'person-circle', label:'Cuenta' },
 ];
 type ThemePreference = 'system' | 'light' | 'dark';
 const THEME_STORAGE_KEY = 'gymflow_mini_theme';
 const SHOW_THEME_SELECTOR = false;
 const SHOW_SCHEDULED_MEMBERSHIP_UI = false;
+const SHOW_ATTENDANCE_ENTRY = false;
 const PROFILE_REFRESH_INTERVAL_MS = 30_000;
 let activeDarkTheme = false;
 const KeyboardScrollContext = createContext<((target: number) => void) | null>(null);
@@ -286,10 +296,12 @@ export default function App() {
 function Login({ onLogin }: { onLogin: (user: User) => void }) {
   const [creatingAccount, setCreatingAccount] = useState(false);
   const [recoveringPassword, setRecoveringPassword] = useState(false);
+  const [verificationEmail, setVerificationEmail] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const loginCardY = useRef(0);
   const revealFocusedInput = useRevealFocusedInput(scrollRef, 24);
@@ -306,13 +318,38 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
     const hideSubscription = Keyboard.addListener('keyboardDidHide', () => scrollRef.current?.scrollTo({ y: 0, animated: true }));
     return () => { showSubscription.remove(); hideSubscription.remove(); };
   }, [scrollLoginFormAboveKeyboard]);
+  useEffect(() => {
+    if (googleLoginAvailable) googleSignin?.configure({ webClientId:googleWebClientId, ...(googleIosClientId ? { iosClientId:googleIosClientId } : {}), offlineAccess:false });
+  }, []);
   const submit = async () => {
     setLoading(true);
     try { onLogin(await api.login(email.trim(), password)); }
-    catch (error) { showError(error); }
+    catch (error) {
+      if (error instanceof ApiError && error.code === 'EMAIL_NOT_VERIFIED') {
+        const pendingEmail = email.trim().toLowerCase();
+        setVerificationEmail(pendingEmail);
+        try { const result = await api.resendEmailVerification(pendingEmail); showSuccess(result.message); } catch (resendError) { showError(resendError); }
+      } else showError(error);
+    }
     finally { setLoading(false); }
   };
-  if (creatingAccount) return <Register onRegistered={onLogin} onBack={() => setCreatingAccount(false)}/>;
+  const loginWithGoogle = async () => {
+    if (!googleSignin || !googleWebClientId) { showError(new Error('El acceso con Google requiere la aplicación instalada')); return; }
+    setGoogleLoading(true);
+    try {
+      if (Platform.OS === 'android') await googleSignin.hasPlayServices({ showPlayServicesUpdateDialog:true });
+      const result = await googleSignin.signIn();
+      if (result.type !== 'success') return;
+      if (!result.data.idToken) throw new Error('Google no devolvió una credencial válida');
+      onLogin(await api.googleLogin(result.data.idToken));
+    } catch (error) {
+      showError(error);
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
+  if (verificationEmail) return <EmailVerification email={verificationEmail} onVerified={onLogin} onBack={() => setVerificationEmail('')}/>;
+  if (creatingAccount) return <Register onRegistered={onLogin} onVerificationRequired={(pendingEmail) => { setCreatingAccount(false); setVerificationEmail(pendingEmail); }} onBack={() => setCreatingAccount(false)}/>;
   if (recoveringPassword) return <PasswordRecovery onBack={() => setRecoveringPassword(false)}/>;
   return <SafeAreaView style={styles.loginPage} edges={['top','right','bottom','left']}>
     <ExpoStatusBar style="light" translucent backgroundColor="transparent" />
@@ -327,6 +364,10 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
           <PasswordField value={password} onChangeText={setPassword} visible={passwordVisible} onToggleVisibility={() => setPasswordVisible(value => !value)} onSubmit={() => void submit()} />
           <Pressable accessibilityRole="button" onPress={() => setRecoveringPassword(true)} style={styles.forgotPasswordButton}><Text style={styles.forgotPasswordText}>¿Olvidaste tu contraseña?</Text></Pressable>
           <PrimaryButton label={loading ? 'Entrando…' : 'Entrar'} onPress={submit} disabled={loading || !email.trim() || !password} />
+          {googleLoginAvailable ? <>
+            <View style={styles.loginDivider}><View style={styles.loginDividerLine}/><Text style={styles.loginDividerText}>o</Text><View style={styles.loginDividerLine}/></View>
+            <Pressable accessibilityRole="button" accessibilityLabel="Continuar con Google" accessibilityState={{disabled:loading||googleLoading}} disabled={loading||googleLoading} onPress={()=>void loginWithGoogle()} style={({pressed})=>[styles.googleLoginButton,(loading||googleLoading)&&styles.disabled,pressed&&styles.tabPressed]}>{googleLoading?<ActivityIndicator color="#173f31"/>:<Ionicons name="logo-google" size={20} color="#4285F4"/>}<Text style={styles.googleLoginText}>{googleLoading?'Conectando…':'Continuar con Google'}</Text></Pressable>
+          </> : null}
         </View>
         <View style={styles.loginJoin}>
           <Text style={styles.loginJoinText}>¿Eres dueño de un Gimnasio y no tienes una cuenta?</Text>
@@ -334,11 +375,24 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
             <Text style={styles.loginJoinLink}>Crear cuenta</Text>
           </Pressable>
         </View>
-        <Text style={styles.version}>V0.1</Text>
+        <Text style={styles.version}>V{appVersion}</Text>
         </KeyboardScrollContext.Provider>
       </ScrollView>
     </KeyboardAvoidingView>
   </SafeAreaView>;
+}
+
+function EmailVerification({ email, onVerified, onBack }: { email:string; onVerified:(user:User)=>void; onBack:()=>void }) {
+  const [code,setCode]=useState('');
+  const [loading,setLoading]=useState(false);
+  const [resending,setResending]=useState(false);
+  useEffect(()=>{if(Platform.OS!=='android')return;const subscription=BackHandler.addEventListener('hardwareBackPress',()=>{Keyboard.dismiss();onBack();return true;});return()=>subscription.remove();},[onBack]);
+  const verify=async()=>{setLoading(true);try{onVerified(await api.verifyEmail(email,code));showSuccess('Correo verificado. Tu cuenta está lista.');}catch(error){showError(error);}finally{setLoading(false);}};
+  const resend=async()=>{setResending(true);try{const result=await api.resendEmailVerification(email);showSuccess(result.message);}catch(error){showError(error);}finally{setResending(false);}};
+  return <SafeAreaView style={styles.loginPage} edges={['top','right','bottom','left']}><ExpoStatusBar style="light" translucent backgroundColor="transparent"/><KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':'height'} style={styles.loginKeyboardAvoiding}><ScrollView contentContainerStyle={styles.registerScroll} keyboardShouldPersistTaps="handled" keyboardDismissMode={Platform.OS==='ios'?'interactive':'on-drag'} showsVerticalScrollIndicator={false}>
+    <Pressable accessibilityRole="button" accessibilityLabel="Volver al inicio de sesión" onPress={onBack} style={styles.authBack}><Ionicons name="arrow-back" size={20} color={palette.white}/><Text style={styles.authBackText}>Volver</Text></Pressable><Text style={styles.loginBrand}>GymFlow <Text style={styles.mini}>MINI</Text></Text><Text style={styles.registerTitle}>Verifica tu correo</Text><Text style={styles.loginCopy}>Escribe el código de 6 dígitos enviado a {email}.</Text>
+    <View style={styles.loginCard}><View style={styles.verificationIcon}><Ionicons name="mail-outline" size={26} color={palette.action}/></View><Field label="Código de verificación" value={code} onChangeText={value=>setCode(value.replace(/\D/g,'').slice(0,6))} keyboardType="number-pad" maxLength={6} returnKeyType="done" onSubmitEditing={()=>void verify()}/><Text style={styles.registrationNote}>El código vence en 15 minutos y admite hasta cinco intentos.</Text><PrimaryButton label={loading?'Verificando…':'Verificar correo'} onPress={verify} disabled={loading||resending||code.length!==6}/><Pressable accessibilityRole="button" disabled={loading||resending} onPress={()=>void resend()} style={styles.resendCodeButton}><Text style={styles.forgotPasswordText}>{resending?'Enviando…':'Reenviar código'}</Text></Pressable></View>
+  </ScrollView></KeyboardAvoidingView></SafeAreaView>;
 }
 
 function PasswordRecovery({ onBack }: { onBack: () => void }) {
@@ -367,7 +421,7 @@ function PasswordRecovery({ onBack }: { onBack: () => void }) {
   </KeyboardScrollContext.Provider></ScrollView></KeyboardAvoidingView></SafeAreaView>;
 }
 
-function Register({ onRegistered, onBack }: { onRegistered: (user: User) => void; onBack: () => void }) {
+function Register({ onRegistered, onVerificationRequired, onBack }: { onRegistered: (user: User) => void; onVerificationRequired:(email:string)=>void; onBack: () => void }) {
   const [ownerName,setOwnerName]=useState(''); const [gymName,setGymName]=useState(''); const [province,setProvince]=useState('');
   const [phone,setPhone]=useState(''); const [email,setEmail]=useState(''); const [password,setPassword]=useState(''); const [confirmation,setConfirmation]=useState(''); const [loading,setLoading]=useState(false);
   const [page,setPage]=useState(0); const keyboardOpen=useKeyboardOpen();
@@ -377,7 +431,7 @@ function Register({ onRegistered, onBack }: { onRegistered: (user: User) => void
   const submit=async()=>{
     if(password!==confirmation){showError(new Error('Las contraseñas no coinciden'));return;}
     setLoading(true);
-    try{onRegistered(await api.register({ownerName:ownerName.trim(),gymName:gymName.trim(),province:province.trim()||undefined,phone:phone.trim(),email:email.trim(),password}));showSuccess('Cuenta creada. Ahora elige cómo comenzar.');}
+    try{const result=await api.register({ownerName:ownerName.trim(),gymName:gymName.trim(),province:province.trim()||undefined,phone:phone.trim(),email:email.trim(),password});if(result.verificationRequired){showSuccess(result.message);onVerificationRequired(result.email);}else{onRegistered(result.user);showSuccess('Cuenta creada. Ahora elige cómo comenzar.');}}
     catch(error){showError(error);}finally{setLoading(false);}
   };
   const goBack=()=>{Keyboard.dismiss();if(page>0)setPage(value=>value-1);else onBack();};
@@ -498,20 +552,24 @@ function AdminApp({ user, dark, themePreference, onThemeChange, onLogout }: { us
   }, [issuesOpen, accountPasswordOpen, tab]);
   if (!ready) return <View style={styles.center}><ActivityIndicator color="#c9f47b" size="large" /></View>;
   const nestedAccountPage = tab === 'CUENTA' && accountPasswordOpen;
+  const currentScreenTitle = tab === 'ASISTENCIA' ? 'Asistencia' : tab === 'CUENTA' ? 'Cuenta' : tabs.find((item) => item.id === tab)?.title ?? tabs.find((item) => item.id === tab)?.label;
   return <SafeAreaView style={styles.app} edges={['top','right','bottom','left']}><StatusBar translucent backgroundColor="transparent" barStyle={dark ? "light-content" : "dark-content"} />
     {!nestedAccountPage ? <View style={styles.topbar}>
-      <View style={styles.topbarTitle}><Text numberOfLines={1} ellipsizeMode="tail" maxFontSizeMultiplier={1.3} style={styles.kicker}>{currentUser.gym.name.toUpperCase()}</Text><Text maxFontSizeMultiplier={1.3} style={styles.screenTitle}>{tabs.find((item) => item.id === tab)?.title ?? tabs.find((item) => item.id === tab)?.label}</Text></View>
+      {tab === 'ASISTENCIA' ? <Pressable accessibilityRole="button" accessibilityLabel="Volver al inicio" onPress={() => setTab('INICIO')} style={({pressed}) => [styles.topbarBack,dark&&{backgroundColor:darkPalette.raised},pressed&&styles.tabPressed]}><Ionicons name="arrow-back" size={23} color={dark?darkPalette.text:palette.ink}/></Pressable> : null}
+      <View style={styles.topbarTitle}><Text numberOfLines={1} ellipsizeMode="tail" maxFontSizeMultiplier={1.3} style={styles.kicker}>{currentUser.gym.name.toUpperCase()}</Text><Text maxFontSizeMultiplier={1.3} style={styles.screenTitle}>{currentScreenTitle}</Text></View>
+      <Pressable accessibilityRole="button" accessibilityState={{selected:tab==='CUENTA'}} accessibilityLabel="Abrir cuenta" onPress={() => setTab('CUENTA')} style={({pressed}) => [styles.avatar,tab==='CUENTA'&&styles.avatarActive,dark&&tab!=='CUENTA'&&{backgroundColor:darkPalette.raised},pressed&&styles.tabPressed]}><Ionicons name={tab==='CUENTA'?'person':'person-outline'} size={23} color={tab==='CUENTA'||!dark?palette.brand:darkPalette.text}/></Pressable>
     </View> : null}
     {!nestedAccountPage && (!keyboardOpen || (tab !== 'MIEMBROS' && tab !== 'PLANES')) && <SyncBar state={syncState} onPress={() => { void refreshProfile(); syncState.rejected > 0 ? setIssuesOpen(true) : void syncNow(scope); }} />}
     <View style={styles.content}>
-      {tab === 'INICIO' && <DashboardScreen scope={scope} revision={revision} onOpenUpcoming={() => { setMemberEntryFilter('UPCOMING'); setTab('MIEMBROS'); }} />}
+      {tab === 'INICIO' && <DashboardScreen scope={scope} revision={revision} onOpenAttendance={() => setTab('ASISTENCIA')} onOpenUpcoming={() => { setMemberEntryFilter('UPCOMING'); setTab('MIEMBROS'); }} />}
       {tab === 'MIEMBROS' && <MembersScreen scope={scope} revision={revision} initialFilter={memberEntryFilter} />}
+      {tab === 'ASISTENCIA' && <AttendanceScreen scope={scope} revision={revision} dark={dark} assertCanOperate={ensureActiveSubscription} onError={showError} onSuccess={showSuccess} />}
       {tab === 'PLANES' && <PlansScreen scope={scope} revision={revision} />}
       {tab === 'CAJA' && <PaymentsScreen scope={scope} revision={revision} />}
       {tab === 'ESTADISTICAS' && <StatisticsScreen scope={scope} revision={revision} />}
       {tab === 'CUENTA' && <AccountScreen user={currentUser} onUserChange={setCurrentUser} themePreference={themePreference} onThemeChange={onThemeChange} onLogout={onLogout} passwordOpen={accountPasswordOpen} onPasswordOpenChange={setAccountPasswordOpen} />}
     </View>
-    {!nestedAccountPage ? <View style={styles.tabbar}>{tabs.map((item) => { const active=tab===item.id; return <Pressable accessibilityRole="tab" accessibilityState={{selected:active}} accessibilityLabel={item.label} key={item.id} onPress={() => { if (item.id === 'MIEMBROS') setMemberEntryFilter('ALL'); setTab(item.id); }} style={({pressed}) => [styles.tab,pressed&&styles.tabPressed]}><View style={[styles.tabIconWrap,active&&styles.tabIconWrapActive]}><Ionicons name={active?item.activeIcon:item.icon} size={21} color={active?(activeDarkTheme?'#c9f47b':'#1d6b4d'):(activeDarkTheme?'#adb7b1':'#657169')}/></View><Text style={[styles.tabLabel,active&&styles.tabActive]}>{item.label}</Text></Pressable>;})}</View> : null}
+    {!nestedAccountPage ? <View style={styles.tabbar}>{tabs.map((item) => { const active=tab===item.id||(tab==='ASISTENCIA'&&item.id==='INICIO'); return <Pressable accessibilityRole="tab" accessibilityState={{selected:active}} accessibilityLabel={item.label} key={item.id} onPress={() => { if (item.id === 'MIEMBROS') setMemberEntryFilter('ALL'); setTab(item.id); }} style={({pressed}) => [styles.tab,pressed&&styles.tabPressed]}><View style={[styles.tabIconWrap,active&&styles.tabIconWrapActive]}><Ionicons name={active?item.activeIcon:item.icon} size={21} color={active?(activeDarkTheme?'#c9f47b':'#1d6b4d'):(activeDarkTheme?'#adb7b1':'#657169')}/></View><Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72} style={[styles.tabLabel,active&&styles.tabActive]}>{item.label}</Text></Pressable>;})}</View> : null}
     <SyncIssues open={issuesOpen} scope={scope} revision={revision} onClose={() => setIssuesOpen(false)} />
   </SafeAreaView>;
 }
@@ -520,7 +578,7 @@ type ScreenProps = { scope: string; revision: number };
 type MemberFilter = 'ALL' | 'ACTIVE' | 'INACTIVE' | 'UPCOMING' | 'EXPIRED';
 type PlanFilter = 'ALL' | 'ACTIVE' | 'INACTIVE';
 
-function DashboardScreen({ scope, revision, onOpenUpcoming }: ScreenProps & { onOpenUpcoming: () => void }) {
+function DashboardScreen({ scope, revision, onOpenAttendance, onOpenUpcoming }: ScreenProps & { onOpenAttendance: () => void; onOpenUpcoming: () => void }) {
   const [data, setData] = useState<Dashboard | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [loading, setLoading] = useState(true);
@@ -532,6 +590,7 @@ function DashboardScreen({ scope, revision, onOpenUpcoming }: ScreenProps & { on
   if (loading && !data) return <ScrollView contentContainerStyle={styles.scroll}><LoadingSkeleton rows={6}/></ScrollView>;
   return <ScrollView refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} colors={[activeDarkTheme ? '#c9f47b' : '#1d6b4d']} tintColor={activeDarkTheme ? '#c9f47b' : '#1d6b4d'} progressBackgroundColor={activeDarkTheme ? '#212923' : '#fff'} />} contentContainerStyle={styles.scroll}>
     <View style={styles.hero}><Text style={styles.heroLabel}>INGRESOS DE {monthName}</Text><Text style={styles.heroValue}>{money(data?.monthlyRevenue ?? 0)}</Text><Text style={styles.heroHint}>Dinero realmente cobrado</Text></View>
+    {SHOW_ATTENDANCE_ENTRY ? <View style={styles.dashboardAttendanceAction}><PrimaryButton label="Registrar entrada" icon="scan-outline" onPress={onOpenAttendance}/></View> : null}
     <View style={styles.metricGrid}><Metric label="Miembros" value={data?.members ?? 0} /><Metric label="Membresías activas" value={data?.activeMemberships ?? 0} /><Metric label="Por cobrar" value={money(data?.pendingDebt ?? 0)} wide /></View>
     <View style={styles.upcomingCard}><View style={styles.upcomingHead}><View style={styles.upcomingIcon}><Ionicons name="time-outline" size={20} color={palette.warning}/></View><View style={styles.rowMain}><Text style={styles.upcomingTitle}>Membresías próximas a vencer</Text><Text style={styles.upcomingCopy}>En los próximos 10 días</Text></View><View style={styles.upcomingCount}><Text style={styles.upcomingCountText}>{upcoming.length}</Text></View></View>{upcoming.slice(0,4).map(({member,membership}) => <View key={membership.id} style={styles.upcomingRow}><View style={styles.rowMain}><Text numberOfLines={1} ellipsizeMode="tail" style={styles.upcomingName}>{member.firstName} {member.lastName}</Text><Text numberOfLines={1} ellipsizeMode="tail" style={styles.upcomingPlan}>{contractedPlan(membership).name}</Text></View><View><Text style={styles.upcomingDate}>{formatDate(membership.endDate)}</Text><Text style={styles.upcomingDays}>{remainingDaysLabel(membership.endDate)}</Text></View></View>)}{upcoming.length ? <Pressable accessibilityRole="button" onPress={onOpenUpcoming} style={({pressed}) => [styles.upcomingAction,styles.minTouch,pressed&&styles.tabPressed]}><Text style={styles.upcomingActionText}>Ver y gestionar en Miembros</Text><Ionicons name="arrow-forward" size={17} color={palette.warning}/></Pressable> : <Text style={styles.upcomingEmpty}>No hay vencimientos cercanos.</Text>}</View>
     <SectionTitle title="Últimos cobros" subtitle="Movimientos registrados por el gimnasio" />
@@ -651,7 +710,7 @@ function AccountScreen({ user, onUserChange, themePreference, onThemeChange, onL
     <Pressable accessibilityRole="link" accessibilityLabel="Contactar soporte por WhatsApp" onPress={()=>openWhatsApp(`Hola, soy ${user.name}, administrador de ${user.gym.name}. Necesito soporte con GymFlow Mini.`)} style={({pressed})=>[styles.supportButton,pressed&&styles.tabPressed]}><View style={styles.supportIcon}><Ionicons name="logo-whatsapp" size={23} color={palette.white}/></View><View style={styles.rowMain}><Text style={styles.supportTitle}>Soporte por WhatsApp</Text><Text style={styles.supportCopy}>Contacta directamente con el equipo de GymFlow Mini</Text></View><Ionicons name="open-outline" size={19} color={palette.white}/></Pressable>
     {SHOW_THEME_SELECTOR ? <ThemeSelector value={themePreference} onChange={onThemeChange}/> : null}
     <Pressable accessibilityRole="button" onPress={confirmLogout} style={({pressed}) => [styles.logoutButton, pressed && styles.logoutButtonPressed]}><View style={styles.logoutIcon}><Ionicons name="log-out-outline" size={22} color={palette.danger}/></View><View style={styles.rowMain}><Text style={styles.logoutTitle}>Cerrar sesión</Text><Text style={styles.logoutCopy}>Salir de esta cuenta en el dispositivo</Text></View></Pressable>
-    <Text style={styles.accountVersion}>GYMFLOW MINI · PILOTO CUBA · V0.1</Text>
+    <Text style={styles.accountVersion}>GYMFLOW MINI · PILOTO CUBA · V{appVersion}</Text>
   </ScrollView></>;
 }
 
@@ -697,7 +756,7 @@ function MembersScreen({ scope, revision, initialFilter }: ScreenProps & { initi
         <SectionTitle title={query ? `${visibleMembers.length} resultado${visibleMembers.length === 1 ? '' : 's'}` : `${visibleMembers.length} miembro${visibleMembers.length === 1 ? '' : 's'}`} subtitle={memberFilter === 'EXPIRED' ? 'Miembros activos sin una membresía vigente' : memberFilter === 'UPCOMING' ? 'Membresías que vencen en los próximos 10 días' : query ? `Búsqueda dentro del filtro seleccionado` : "Toca un miembro para ver sus opciones"} />
       </>}
       renderItem={({ item:member }) => { const current = editableMembership(member) ?? member.memberships[0]; const currentStatus=current ? effectiveMembershipStatus(current) : undefined; const expiring=upcomingMembership(member); return <Pressable accessibilityRole="button" accessibilityLabel={`Opciones de ${member.firstName} ${member.lastName}`} onPress={() => setSelected(member)} style={({pressed}) => [styles.memberRow, styles.memberListRow, pressed && styles.memberRowPressed]}>
-        <View style={styles.memberAvatar}><Text style={styles.memberAvatarText}>{member.firstName[0]}{member.lastName[0]}</Text></View><View style={styles.rowMain}><Text numberOfLines={1} ellipsizeMode="tail" maxFontSizeMultiplier={1.35} style={styles.rowTitle}>{member.firstName} {member.lastName}</Text><Text numberOfLines={1} ellipsizeMode="tail" maxFontSizeMultiplier={1.3} style={styles.rowSubtitle}>{member.code ? `Código ${member.code} · ` : ''}CI {member.ci}</Text><View style={styles.memberPlanLine}><View style={[styles.memberPlanDot, currentStatus === 'ACTIVE' && styles.memberPlanDotActive, expiring&&styles.memberPlanDotUpcoming, currentStatus === 'EXPIRED' && styles.memberPlanDotExpired]}/><Text numberOfLines={1} ellipsizeMode="tail" maxFontSizeMultiplier={1.3} style={[styles.memberPlanText,expiring&&styles.memberPlanTextUpcoming,currentStatus === 'EXPIRED'&&styles.memberPlanTextExpired]}>{current ? expiring ? `${contractedPlan(current).name} · vence ${formatDate(current.endDate)}` : `${contractedPlan(current).name} · ${membershipStatusLabel(currentStatus!)}` : 'Sin plan asignado'}</Text></View></View><Ionicons name="chevron-forward" size={22} color={activeDarkTheme ? darkPalette.secondary : palette.secondary}/>
+        <MemberPhotoAvatar member={member}/><View style={styles.rowMain}><Text numberOfLines={1} ellipsizeMode="tail" maxFontSizeMultiplier={1.35} style={styles.rowTitle}>{member.firstName} {member.lastName}</Text><Text numberOfLines={1} ellipsizeMode="tail" maxFontSizeMultiplier={1.3} style={styles.rowSubtitle}>{member.code ? `Código ${member.code} · ` : ''}CI {member.ci}</Text><View style={styles.memberPlanLine}><View style={[styles.memberPlanDot, currentStatus === 'ACTIVE' && styles.memberPlanDotActive, expiring&&styles.memberPlanDotUpcoming, currentStatus === 'EXPIRED' && styles.memberPlanDotExpired]}/><Text numberOfLines={1} ellipsizeMode="tail" maxFontSizeMultiplier={1.3} style={[styles.memberPlanText,expiring&&styles.memberPlanTextUpcoming,currentStatus === 'EXPIRED'&&styles.memberPlanTextExpired]}>{current ? expiring ? `${contractedPlan(current).name} · vence ${formatDate(current.endDate)}` : `${contractedPlan(current).name} · ${membershipStatusLabel(currentStatus!)}` : 'Sin plan asignado'}</Text></View></View><Ionicons name="chevron-forward" size={22} color={activeDarkTheme ? darkPalette.secondary : palette.secondary}/>
       </Pressable>; }}
       ListEmptyComponent={loading ? <LoadingSkeleton/> : <View style={styles.card}><Empty text={query ? "No se encontraron miembros" : memberFilter === 'UPCOMING' ? "No hay membresías próximas a vencer" : memberFilter === 'EXPIRED' ? "No hay membresías vencidas" : memberFilter === 'INACTIVE' ? "No hay miembros inactivos" : memberFilter === 'ACTIVE' ? "No hay miembros activos" : "Registra tu primer miembro"} /></View>}
     />
@@ -716,7 +775,7 @@ function MemberActions({ member, onClose, onEdit, onPlan, onRenew, onEditSchedul
   const fullName = member ? `${member.firstName} ${member.lastName}` : 'Opciones del miembro';
   return <Sheet open={!!member} title={fullName} onClose={onClose}>
     <View style={styles.memberProfile}>
-      <View style={styles.memberProfileAvatar}><Text style={styles.memberProfileInitials}>{member ? `${member.firstName[0]}${member.lastName[0]}` : ''}</Text></View>
+      {member ? <MemberPhotoAvatar member={member} profile/> : <View style={styles.memberProfileAvatar}/>}
       <View style={styles.rowMain}><Text numberOfLines={2} ellipsizeMode="tail" maxFontSizeMultiplier={1.35} style={styles.memberProfileName}>{fullName}</Text><Text numberOfLines={1} ellipsizeMode="tail" style={styles.memberProfileMeta}>CI {member?.ci}{member?.phone ? ` · ${member.phone}` : ''}</Text><Text numberOfLines={2} ellipsizeMode="tail" maxFontSizeMultiplier={1.3} style={[styles.memberProfilePlan,membership&&effectiveMembershipStatus(membership)==='EXPIRED'&&styles.memberPlanTextExpired]}>{membership ? `${contractedPlan(membership).name} · ${membershipStatusLabel(effectiveMembershipStatus(membership))}` : 'Sin membresía vigente'}</Text>{active?<Text style={styles.memberProfileExpiry}>Vence el {formatDate(active.endDate)} · {remainingDaysLabel(active.endDate)}</Text>:null}</View>
     </View>
     {SHOW_SCHEDULED_MEMBERSHIP_UI&&scheduled?<View style={styles.scheduledMembershipCard}>
@@ -798,9 +857,18 @@ function PaymentsScreen({ scope, revision }: ScreenProps) {
   /><PaymentForm scope={scope} payment={selected} onClose={() => setSelected(null)} onSaved={() => { setSelected(null); load(); }} /></>;
 }
 
+async function prepareMemberPhoto(uri: string) {
+  for (const compress of [0.72, 0.55, 0.4]) {
+    const result = await ImageManipulator.manipulateAsync(uri, [{ resize:{ width:512, height:512 } }], { compress, format:ImageManipulator.SaveFormat.JPEG });
+    if ((new File(result.uri).size ?? Number.MAX_SAFE_INTEGER) <= 240 * 1024) return result.uri;
+  }
+  throw new Error('No fue posible reducir la foto por debajo de 250 KB');
+}
+
 function MemberForm({ scope, open, member, plans, onClose, onSaved }: FormProps & { member: Member | null; plans: Plan[] }) {
   const [ci, setCi] = useState(''); const [code, setCode] = useState(''); const [firstName, setFirstName] = useState(''); const [lastName, setLastName] = useState(''); const [age, setAge] = useState(''); const [sex, setSex] = useState<MemberSex | ''>(''); const [phone, setPhone] = useState(''); const [address, setAddress] = useState(''); const [status, setStatus] = useState('ACTIVE'); const [saving, setSaving] = useState(false);
   const [page, setPage] = useState(0); const [planId, setPlanId] = useState(''); const [periodCount, setPeriodCount] = useState(1); const [initialPayment, setInitialPayment] = useState('');
+  const [photoUri, setPhotoUri] = useState<string | null>(null); const [removePhoto, setRemovePhoto] = useState(false); const [preparingPhoto, setPreparingPhoto] = useState(false);
   const keyboardOpen = useKeyboardOpen();
   const scrollRef = useRef<ScrollView>(null);
   const revealFocusedInput = useRevealFocusedInput(scrollRef, 120);
@@ -808,8 +876,30 @@ function MemberForm({ scope, open, member, plans, onClose, onSaved }: FormProps 
   const selectedInitialPlan = availablePlans.find(plan => plan.id === planId);
   const initialEndDate = selectedInitialPlan ? addDays(new Date().toISOString(), selectedInitialPlan.durationDays * periodCount) : undefined;
   const totalPages = member ? 4 : 5;
-  useEffect(() => { if (!open) return; setPage(0); setPlanId(''); setPeriodCount(1); setInitialPayment(''); setCi(member?.ci ?? ''); setCode(member?.code ?? ''); setFirstName(member?.firstName ?? ''); setLastName(member?.lastName ?? ''); setAge(member?.age ? String(member.age) : ''); setSex(member?.sex ?? ''); setPhone(member?.phone ?? ''); setAddress(member?.address ?? ''); setStatus(member?.status ?? 'ACTIVE'); }, [open, member]);
-  const save = async () => { setSaving(true); try { ensureActiveSubscription(); const input = { ci, code: code.trim() || null, firstName: firstName.trim(), lastName: lastName.trim(), age: age ? Number(age) : null, sex: sex || null, phone: phone.trim(), address: address.trim() }; if (member) await offline.updateMember(scope, member.id, { ...input, status }); else { if (!planId) throw new Error('Selecciona el plan inicial'); await offline.createMember(scope, input); await syncNow(scope); const createdMember=(await offline.members(scope)).find(item => item.ci === ci); if (!createdMember) throw new Error('No se pudo encontrar el miembro recién creado'); await offline.assignPlan(scope, { memberId:createdMember.id, planId, periodCount, ...(Number(initialPayment)>0?{initialPayment:Number(initialPayment),paymentMethod:'CASH'}:{}) }); } Keyboard.dismiss(); showSuccess(member ? 'Datos del miembro actualizados.' : 'Miembro y membresía registrados.'); onSaved(); } catch (error) { showError(error); } finally { setSaving(false); } };
+  const hasVisiblePhoto = Boolean(photoUri || (member?.photoUpdatedAt && !removePhoto));
+  const photoChangePending = Boolean(photoUri || removePhoto);
+  useEffect(() => { if (!open) return; setPage(0); setPlanId(''); setPeriodCount(1); setInitialPayment(''); setPhotoUri(null); setRemovePhoto(false); setCi(member?.ci ?? ''); setCode(member?.code ?? ''); setFirstName(member?.firstName ?? ''); setLastName(member?.lastName ?? ''); setAge(member?.age ? String(member.age) : ''); setSex(member?.sex ?? ''); setPhone(member?.phone ?? ''); setAddress(member?.address ?? ''); setStatus(member?.status ?? 'ACTIVE'); }, [open, member]);
+  const choosePhoto = async (source: 'CAMERA' | 'LIBRARY') => {
+    setPreparingPhoto(true);
+    try {
+      const permission = source === 'CAMERA' ? await ImagePicker.requestCameraPermissionsAsync() : await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) throw new Error(source === 'CAMERA' ? 'Autoriza el acceso a la cámara para tomar la foto' : 'Autoriza el acceso a tus fotos para seleccionar una imagen');
+      const result = source === 'CAMERA'
+        ? await ImagePicker.launchCameraAsync({ mediaTypes:['images'], allowsEditing:true, aspect:[1,1], quality:1 })
+        : await ImagePicker.launchImageLibraryAsync({ mediaTypes:['images'], allowsEditing:true, aspect:[1,1], quality:1 });
+      if (result.canceled || !result.assets[0]?.uri) return;
+      setPhotoUri(await prepareMemberPhoto(result.assets[0].uri));
+      setRemovePhoto(false);
+    } catch (error) { showError(error); } finally { setPreparingPhoto(false); }
+  };
+  const photoOptions = () => Alert.alert('Foto', 'La imagen se recortará en formato cuadrado y se reducirá antes de subirla.', [
+    { text:'Cancelar', style:'cancel' as const },
+    { text:'Tomar foto', onPress:() => { void choosePhoto('CAMERA'); } },
+    { text:'Elegir de la galería', onPress:() => { void choosePhoto('LIBRARY'); } },
+  ]);
+  const cancelPhotoChange = () => { setPhotoUri(null); setRemovePhoto(false); };
+  const deletePhoto = () => { setPhotoUri(null); setRemovePhoto(Boolean(member?.photoUpdatedAt)); };
+  const save = async () => { setSaving(true); try { ensureActiveSubscription(); const photoChanged=!!photoUri||removePhoto; if(photoChanged&&!await hasInternetConnection()) throw new Error('Conéctate a internet para guardar la foto del miembro'); const input = { ci, code: code.trim() || null, firstName: firstName.trim(), lastName: lastName.trim(), age: age ? Number(age) : null, sex: sex || null, phone: phone.trim(), address: address.trim() }; let targetId=member?.id; if (member) await offline.updateMember(scope, member.id, { ...input, status }); else { if (!planId) throw new Error('Selecciona el plan inicial'); targetId=await offline.createMember(scope, input); await syncNow(scope); await offline.assignPlan(scope, { memberId:targetId, planId, periodCount, ...(Number(initialPayment)>0?{initialPayment:Number(initialPayment),paymentMethod:'CASH'}:{}) }); } if(targetId&&photoUri){await syncNow(scope);await api.uploadMemberPhoto(targetId,photoUri);}else if(targetId&&removePhoto&&member?.photoUpdatedAt){await api.deleteMemberPhoto(targetId);} if(photoChanged)await syncNow(scope); Keyboard.dismiss(); showSuccess(member ? 'Datos del miembro actualizados.' : 'Miembro y membresía registrados.'); onSaved(); } catch (error) { showError(error); } finally { setSaving(false); } };
   const validAge = !age || (Number.isInteger(Number(age)) && Number(age) >= 1 && Number(age) <= 120);
   const pageValid = [!!firstName.trim() && !!lastName.trim(), ci.length === 11, validAge, true, !!planId][page];
   const pageTitles = ['Datos personales', 'Identificación', 'Información adicional', 'Contacto y estado', 'Plan inicial'];
@@ -824,7 +914,7 @@ function MemberForm({ scope, open, member, plans, onClose, onSaved }: FormProps 
     <View style={styles.memberFormHeader}><View style={styles.memberFormHeaderRow}><Pressable accessibilityRole="button" accessibilityLabel={page > 0 ? 'Paso anterior' : 'Volver a miembros'} onPress={goBack} style={({pressed}) => [styles.memberFormBack, pressed && styles.tabPressed]}><Ionicons name="arrow-back" size={19} color={activeDarkTheme ? darkPalette.text : palette.ink}/><Text style={styles.memberFormBackText}>{page > 0 ? 'Atrás' : 'Volver'}</Text></Pressable><Text style={styles.memberFormStep}>PASO {page + 1} DE {totalPages}</Text><Pressable accessibilityRole="button" disabled={!pageValid || saving} onPress={goForward} style={[styles.memberFormNext, (!pageValid || saving) && styles.disabled]}><Text style={styles.memberFormNextText}>{page === totalPages - 1 ? saving ? 'Guardando…' : 'Guardar' : 'Siguiente'}</Text><Ionicons name={page === totalPages - 1 ? 'checkmark' : 'arrow-forward'} size={16} color={palette.white}/></Pressable></View><View style={styles.memberFormProgress}>{Array.from({length:totalPages},(_,step) => <View key={step} style={[styles.memberFormProgressPart, step <= page && styles.memberFormProgressPartActive]}/>)}</View><Text style={styles.memberFormTitle}>{pageTitles[page]}</Text><Text style={styles.memberFormCopy}>{member ? 'Editando los datos del miembro.' : page === 4 ? 'Selecciona obligatoriamente la membresía inicial.' : 'Registrando un nuevo miembro.'}</Text></View>
     <ScrollView ref={scrollRef} key={page} style={styles.memberFormScroll} contentContainerStyle={[styles.memberFormContent, keyboardOpen && styles.memberFormContentKeyboard]} keyboardShouldPersistTaps="handled" keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'} showsVerticalScrollIndicator={keyboardOpen}>
       <KeyboardScrollContext.Provider value={revealFocusedInput}>
-      {page === 0 ? <><Field label="Nombre" value={firstName} onChangeText={setFirstName} /><Field label="Apellidos" value={lastName} onChangeText={setLastName} /></> : null}
+      {page === 0 ? <><Field label="Nombre" value={firstName} onChangeText={setFirstName} /><Field label="Apellidos" value={lastName} onChangeText={setLastName} /><View style={styles.memberPhotoEditor}><View style={styles.memberPhotoEditorAvatar}>{photoUri ? <Image source={{uri:photoUri}} resizeMode="cover" style={styles.memberAvatarImage}/> : member && !removePhoto ? <MemberPhotoAvatar member={member} editor/> : <Text style={styles.memberPhotoEditorInitials}>{firstName[0] ?? ''}{lastName[0] ?? ''}</Text>}</View><View style={styles.memberPhotoEditorContent}><Text style={styles.memberPhotoEditorTitle}>Foto</Text><Text style={styles.memberPhotoEditorCopy}>Cuadrada · 512 × 512 px · máximo 250 KB</Text><View style={styles.memberPhotoEditorActions}><Pressable accessibilityRole="button" disabled={preparingPhoto} onPress={photoOptions} style={({pressed})=>[styles.memberPhotoEditorButton,preparingPhoto&&styles.disabled,pressed&&styles.tabPressed]}>{preparingPhoto?<ActivityIndicator size="small" color={palette.action}/>:<Ionicons name="camera-outline" size={17} color={palette.action}/>}<Text style={styles.memberPhotoEditorButtonText}>{preparingPhoto?'Preparando…':hasVisiblePhoto?'Cambiar foto':'Añadir foto'}</Text></Pressable>{member?.photoUpdatedAt&&!removePhoto?<Pressable accessibilityRole="button" accessibilityLabel="Eliminar foto" disabled={preparingPhoto} onPress={deletePhoto} style={({pressed})=>[styles.memberPhotoEditorButton,styles.memberPhotoEditorDeleteButton,preparingPhoto&&styles.disabled,pressed&&styles.tabPressed]}><Ionicons name="trash-outline" size={16} color={palette.danger}/><Text style={styles.memberPhotoEditorDeleteText}>Eliminar</Text></Pressable>:null}{photoChangePending?<Pressable accessibilityRole="button" accessibilityLabel="Cancelar cambio de foto" disabled={preparingPhoto} onPress={cancelPhotoChange} style={({pressed})=>[styles.memberPhotoEditorCancelButton,preparingPhoto&&styles.disabled,pressed&&styles.tabPressed]}><Text style={styles.memberPhotoEditorCancelText}>Cancelar cambio</Text></Pressable>:null}</View></View></View></> : null}
       {page === 1 ? <><Field label="Carnet de identidad (11 dígitos)" value={ci} onChangeText={(value) => setCi(value.replace(/\D/g, '').slice(0, 11))} keyboardType="number-pad" maxLength={11} /><Field label="Código interno (opcional)" value={code} onChangeText={(value) => setCode(value.slice(0, 40))} maxLength={40} /></> : null}
       {page === 2 ? <><Field label="Edad (opcional)" value={age} onChangeText={(value) => setAge(value.replace(/\D/g, '').slice(0, 3))} keyboardType="number-pad" maxLength={3} /><Text style={styles.fieldLabel}>Sexo (opcional)</Text><View style={styles.statusChoices}>{([['MALE','Masculino'],['FEMALE','Femenino'],['OTHER','Otro']] as Array<[MemberSex,string]>).map(([value,label]) => <Pressable key={value} onPress={() => setSex(sex === value ? '' : value)} style={[styles.statusChoice, sex === value && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, sex === value && styles.statusChoiceTextActive]}>{label}</Text></Pressable>)}</View></> : null}
       {page === 3 ? <><Field label="Teléfono" value={phone} onChangeText={setPhone} keyboardType="phone-pad" /><Field label="Dirección" value={address} onChangeText={setAddress} />{member && <><Text style={styles.fieldLabel}>Estado</Text><View style={styles.statusChoices}><Pressable onPress={() => setStatus('ACTIVE')} style={[styles.statusChoice, status === 'ACTIVE' && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, status === 'ACTIVE' && styles.statusChoiceTextActive]}>Activo</Text></Pressable><Pressable onPress={() => setStatus('INACTIVE')} style={[styles.statusChoice, status === 'INACTIVE' && styles.statusChoiceActive]}><Text style={[styles.statusChoiceText, status === 'INACTIVE' && styles.statusChoiceTextActive]}>Inactivo</Text></Pressable></View></>}</> : null}
@@ -939,7 +1029,7 @@ function SyncIssues({ open, scope, revision, onClose }: { open: boolean; scope: 
   const [issues, setIssues] = useState<SyncIssue[]>([]);
   const load = useCallback(() => { void getSyncIssues(scope).then(setIssues).catch(showError); }, [scope]);
   useEffect(() => { if (open) load(); }, [open, revision, load]);
-  const names: Record<SyncIssue['type'], string> = { MEMBER_CREATE: 'Registrar miembro', MEMBER_UPDATE: 'Editar miembro', MEMBER_DELETE: 'Eliminar miembro', PLAN_CREATE: 'Crear plan', PLAN_UPDATE: 'Editar plan', PLAN_DELETE: 'Eliminar plan', MEMBERSHIP_ASSIGN: 'Asignar plan', MEMBERSHIP_UPDATE: 'Editar membresía', MEMBERSHIP_RENEW: 'Renovar plan', MEMBERSHIP_DELETE: 'Eliminar renovación', PAYMENT_APPLY: 'Registrar cobro' };
+  const names: Record<SyncIssue['type'], string> = { MEMBER_CREATE: 'Registrar miembro', MEMBER_UPDATE: 'Editar miembro', MEMBER_DELETE: 'Eliminar miembro', PLAN_CREATE: 'Crear plan', PLAN_UPDATE: 'Editar plan', PLAN_DELETE: 'Eliminar plan', MEMBERSHIP_ASSIGN: 'Asignar plan', MEMBERSHIP_UPDATE: 'Editar membresía', MEMBERSHIP_RENEW: 'Renovar plan', MEMBERSHIP_DELETE: 'Eliminar renovación', PAYMENT_APPLY: 'Registrar cobro', ATTENDANCE_CHECK_IN: 'Registrar entrada', ATTENDANCE_CHECK_OUT: 'Registrar salida' };
   return <Sheet open={open} title="Cambios por revisar" onClose={onClose}>
     <Text style={styles.sheetCopy}>El servidor rechazó estos cambios. Los datos válidos ya fueron sincronizados.</Text>
     {issues.map((issue) => <View key={issue.id} style={styles.issueCard}><Text style={styles.issueTitle}>{names[issue.type]}</Text><Text style={styles.issueDate}>{new Date(issue.occurredAt).toLocaleString('es-CU')}</Text><Text style={styles.issueError}>{issue.error}</Text><Pressable onPress={() => discardSyncIssue(scope, issue.id).then(load).catch(showError)}><Text style={styles.discard}>Descartar aviso</Text></Pressable></View>)}
@@ -1021,6 +1111,27 @@ function Metric({ label, value, wide }: { label: string; value: string | number;
 function SectionTitle({ title, subtitle }: { title: string; subtitle: string }) { return <View style={styles.sectionTitle}><Text style={styles.sectionHeading}>{title}</Text><Text style={styles.sectionCopy}>{subtitle}</Text></View>; }
 function Row({ title, subtitle, value }: { title: string; subtitle: string; value: string }) { return <View style={styles.paymentRow}><View style={styles.rowMain}><Text numberOfLines={1} ellipsizeMode="tail" maxFontSizeMultiplier={1.35} style={styles.rowTitle}>{title}</Text><Text maxFontSizeMultiplier={1.3} style={styles.rowSubtitle}>{subtitle}</Text></View><Text numberOfLines={1} adjustsFontSizeToFit maxFontSizeMultiplier={1.25} style={styles.income}>{value}</Text></View>; }
 function Empty({ text }: { text: string }) { return <Text style={styles.empty}>{text}</Text>; }
+function MemberPhotoAvatar({ member, profile = false, editor = false }: { member: Member; profile?: boolean; editor?: boolean }) {
+  const [source, setSource] = useState<{ uri: string } | null>(null);
+  useEffect(() => {
+    let active = true;
+    if (!member.photoUpdatedAt) { setSource(null); return () => { active = false; }; }
+    void (async () => {
+      const request = await api.memberPhotoSource(member);
+      const directory = new Directory(Paths.cache, 'member-photos');
+      if (!directory.exists) directory.create({ idempotent:true, intermediates:true });
+      const safeId = member.id.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const version = new Date(member.photoUpdatedAt as string).getTime();
+      const file = new File(directory, `${safeId}-${version}.jpg`);
+      if (!file.exists) await File.downloadFileAsync(request.uri, file, { headers:request.headers, idempotent:true });
+      if (active) setSource({ uri:file.uri });
+    })().catch(() => { if (active) setSource(null); });
+    return () => { active = false; };
+  }, [member.id, member.photoUpdatedAt]);
+  const containerStyle = editor ? styles.memberPhotoEditorAvatar : profile ? styles.memberProfileAvatar : styles.memberAvatar;
+  const textStyle = editor ? styles.memberPhotoEditorInitials : profile ? styles.memberProfileInitials : styles.memberAvatarText;
+  return <View style={[containerStyle,styles.memberAvatarClip]}>{source ? <Image source={source} onError={() => setSource(null)} resizeMode="cover" style={styles.memberAvatarImage}/> : <Text style={textStyle}>{member.firstName[0]}{member.lastName[0]}</Text>}</View>;
+}
 function showError(error: unknown) { publishErrorToast(error instanceof Error ? error.message : typeof error === 'string' ? error : 'Ocurrió un error'); }
 function showSuccess(message: string) { publishToast(message, 'success'); }
 function showPending(message: string) { publishToast(message, 'warning'); }
@@ -1064,17 +1175,17 @@ function withReadableType<T extends StyleSheet.NamedStyles<T>>(source: T): T {
 const baseStyles = StyleSheet.create(withReadableType({
   center:{flex:1,alignItems:'center',justifyContent:'center',backgroundColor:palette.brand},app:{flex:1,backgroundColor:palette.background},content:{flex:1},minTouch:{minHeight:44},
   errorToastLayer:{...StyleSheet.absoluteFillObject,zIndex:1000,elevation:30},errorToast:{position:'absolute',top:Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) + 10 : 54,left:14,right:14,minHeight:72,padding:13,flexDirection:'row',alignItems:'flex-start',gap:10,borderWidth:1,borderColor:'#f8b4ad',borderRadius:15,backgroundColor:'#b42318',shadowColor:'#7a1710',shadowOffset:{width:0,height:6},shadowOpacity:.3,shadowRadius:12,elevation:24},successToast:{borderColor:'#7cc89f',backgroundColor:'#167247',shadowColor:'#0b4a2d'},warningToast:{borderColor:'#f3c26b',backgroundColor:'#a86108',shadowColor:'#6f3c03'},errorToastBody:{flex:1},errorToastTitle:{color:'#fff',fontSize:13,fontWeight:'900'},errorToastMessage:{marginTop:3,color:'#fff',fontSize:12,lineHeight:17,fontWeight:'600'},errorToastClose:{width:44,height:44,marginTop:-7,marginRight:-7,alignItems:'center',justifyContent:'center',borderRadius:12,backgroundColor:'#ffffff1f'},
-  loginPage:{flex:1,backgroundColor:palette.brand,paddingHorizontal:24,paddingTop:36},loginKeyboardAvoiding:{flex:1},loginScroll:{flexGrow:1},loginBrand:{marginTop:8,color:palette.white,fontSize:22,fontWeight:'800'},mini:{color:palette.accent,fontSize:11,letterSpacing:2},loginTitle:{marginTop:44,color:palette.white,fontSize:34,fontWeight:'800',letterSpacing:-1.2},loginCopy:{marginTop:10,color:'#c4d5cd',fontSize:15,lineHeight:22},loginCard:{marginTop:34,padding:20,borderRadius:20,backgroundColor:palette.white},loginJoin:{marginTop:20,alignItems:'center',gap:4},loginJoinText:{color:'#c4d5cd',fontSize:13},loginJoinLink:{color:palette.accent,fontSize:13,fontWeight:'800',textDecorationLine:'underline'},version:{marginTop:'auto',marginBottom:24,textAlign:'center',color:'#a9c3b7',fontSize:10,letterSpacing:2},
-  registerScroll:{flexGrow:1,paddingBottom:28},authBack:{minHeight:44,marginLeft:-8,flexDirection:'row',alignItems:'center',gap:7,alignSelf:'flex-start',paddingHorizontal:8},authBackText:{color:palette.white,fontSize:13,fontWeight:'800'},registerTitle:{marginTop:24,color:palette.white,fontSize:31,fontWeight:'800',letterSpacing:-1},registrationNote:{marginTop:2,marginBottom:4,color:palette.secondary,fontSize:11,lineHeight:16,fontWeight:'600'},forgotPasswordButton:{minHeight:36,alignSelf:'flex-end',justifyContent:'center'},forgotPasswordText:{color:palette.action,fontSize:11,fontWeight:'900'},resendCodeButton:{minHeight:42,alignItems:'center',justifyContent:'center'},
+  loginPage:{flex:1,backgroundColor:palette.brand,paddingHorizontal:24,paddingTop:36},loginKeyboardAvoiding:{flex:1},loginScroll:{flexGrow:1},loginBrand:{marginTop:8,color:palette.white,fontSize:22,fontWeight:'800'},mini:{color:palette.accent,fontSize:11,letterSpacing:2},loginTitle:{marginTop:44,color:palette.white,fontSize:34,fontWeight:'800',letterSpacing:-1.2},loginCopy:{marginTop:10,color:'#c4d5cd',fontSize:15,lineHeight:22},loginCard:{marginTop:34,padding:20,borderRadius:20,backgroundColor:palette.white},loginDivider:{marginVertical:16,flexDirection:'row',alignItems:'center',gap:10},loginDividerLine:{height:1,flex:1,backgroundColor:'#dce4df'},loginDividerText:{color:palette.secondary,fontSize:12,fontWeight:'700'},googleLoginButton:{minHeight:48,borderWidth:1,borderColor:'#cfd9d3',borderRadius:12,backgroundColor:palette.white,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:10},googleLoginText:{color:palette.brand,fontSize:13,fontWeight:'800'},loginJoin:{marginTop:20,alignItems:'center',gap:4},loginJoinText:{color:'#c4d5cd',fontSize:13},loginJoinLink:{color:palette.accent,fontSize:13,fontWeight:'800',textDecorationLine:'underline'},version:{marginTop:'auto',marginBottom:24,textAlign:'center',color:'#a9c3b7',fontSize:10,letterSpacing:2},
+  registerScroll:{flexGrow:1,paddingBottom:28},authBack:{minHeight:44,marginLeft:-8,flexDirection:'row',alignItems:'center',gap:7,alignSelf:'flex-start',paddingHorizontal:8},authBackText:{color:palette.white,fontSize:13,fontWeight:'800'},registerTitle:{marginTop:24,color:palette.white,fontSize:31,fontWeight:'800',letterSpacing:-1},verificationIcon:{width:52,height:52,marginBottom:16,alignItems:'center',justifyContent:'center',borderRadius:17,backgroundColor:'#e8f5ce'},registrationNote:{marginTop:2,marginBottom:4,color:palette.secondary,fontSize:11,lineHeight:16,fontWeight:'600'},forgotPasswordButton:{minHeight:36,alignSelf:'flex-end',justifyContent:'center'},forgotPasswordText:{color:palette.action,fontSize:11,fontWeight:'900'},resendCodeButton:{minHeight:42,alignItems:'center',justifyContent:'center'},
   offerPage:{flex:1,backgroundColor:palette.background},offerScroll:{flexGrow:1,paddingHorizontal:22,paddingTop:28,paddingBottom:24},offerBrand:{color:palette.brand,fontSize:22,fontWeight:'900'},offerMini:{color:palette.action,fontSize:11,letterSpacing:2},offerEyebrow:{marginTop:38,color:palette.action,fontSize:10,fontWeight:'900',letterSpacing:1.25},offerTitle:{marginTop:8,color:palette.ink,fontSize:30,lineHeight:35,fontWeight:'900',letterSpacing:-1},offerCopy:{marginTop:10,color:palette.secondary,fontSize:14,lineHeight:21},offerList:{marginTop:26,gap:12},offerCard:{minHeight:94,padding:14,flexDirection:'row',alignItems:'center',gap:12,borderWidth:1,borderColor:palette.line,borderRadius:18,backgroundColor:palette.white},offerCardFeatured:{borderColor:'#83b79d',backgroundColor:'#f2faf5'},offerCardDisabled:{opacity:.65},offerIcon:{width:45,height:45,borderRadius:14,alignItems:'center',justifyContent:'center',backgroundColor:'#e5f2e9'},offerIconFeatured:{backgroundColor:palette.action},offerCardTitle:{color:palette.ink,fontSize:15,fontWeight:'900'},offerCardDetail:{marginTop:5,color:palette.secondary,fontSize:10,fontWeight:'700'},offerPriceWrap:{alignItems:'flex-end',gap:8},offerPrice:{color:palette.action,fontSize:12,fontWeight:'900'},trialProtection:{marginTop:18,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:6},trialProtectionText:{flex:1,color:palette.secondary,fontSize:10,lineHeight:15,fontWeight:'700'},offerLogout:{minHeight:44,marginTop:'auto',alignItems:'center',justifyContent:'center'},offerLogoutText:{color:palette.secondary,fontSize:12,fontWeight:'800'},pendingCard:{marginTop:28,padding:22,borderWidth:1,borderColor:'#ead7bd',borderRadius:22,backgroundColor:palette.white},pendingIcon:{width:54,height:54,borderRadius:18,alignItems:'center',justifyContent:'center',backgroundColor:'#fff1df'},pendingTitle:{marginTop:8,color:palette.ink,fontSize:25,fontWeight:'900'},pendingCopy:{marginTop:10,color:palette.secondary,fontSize:13,lineHeight:20},requestCode:{marginTop:22,padding:15,alignItems:'center',gap:6,borderRadius:14,backgroundColor:'#f2f5f3'},requestCodeLabel:{color:palette.secondary,fontSize:9,fontWeight:'900',letterSpacing:1},requestCodeValue:{color:palette.action,fontSize:24,fontWeight:'900',letterSpacing:1.5},pendingPlan:{marginTop:12,paddingVertical:12,flexDirection:'row',justifyContent:'space-between',gap:12,borderBottomWidth:1,borderBottomColor:palette.line},pendingPlanLabel:{color:palette.secondary,fontSize:11,fontWeight:'700'},pendingPlanValue:{color:palette.ink,fontSize:11,fontWeight:'900'},pendingActions:{marginTop:20,gap:12},offerWhatsapp:{height:49,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:8,borderRadius:13,backgroundColor:'#1fa855'},offerWhatsappText:{color:palette.white,fontSize:12,fontWeight:'900'},changePlanButton:{minHeight:44,marginTop:4,alignItems:'center',justifyContent:'center'},changePlanText:{color:palette.action,fontSize:11,fontWeight:'900'},
-  topbar:{paddingTop:18,paddingHorizontal:20,paddingBottom:14,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:12,backgroundColor:palette.background},topbarTitle:{flex:1,minWidth:0},kicker:{color:palette.action,fontSize:11,fontWeight:'800',letterSpacing:1.2},screenTitle:{marginTop:3,fontSize:27,fontWeight:'800',color:palette.ink,letterSpacing:-.8},avatar:{width:44,height:44,borderRadius:22,alignItems:'center',justifyContent:'center',backgroundColor:palette.accent},
+  topbar:{paddingTop:18,paddingHorizontal:20,paddingBottom:14,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:12,backgroundColor:palette.background},topbarBack:{width:44,height:44,alignItems:'center',justifyContent:'center',borderRadius:13,backgroundColor:palette.white},topbarTitle:{flex:1,minWidth:0},kicker:{color:palette.action,fontSize:11,fontWeight:'800',letterSpacing:1.2},screenTitle:{marginTop:3,fontSize:27,fontWeight:'800',color:palette.ink,letterSpacing:-.8},avatar:{width:44,height:44,borderWidth:1,borderColor:palette.line,borderRadius:22,alignItems:'center',justifyContent:'center',backgroundColor:palette.white},avatarActive:{borderColor:palette.accent,backgroundColor:palette.accent},
   syncBar:{minHeight:44,marginHorizontal:16,marginBottom:4,paddingHorizontal:12,flexDirection:'row',alignItems:'center',gap:9,borderRadius:12,backgroundColor:'#e8f5ce'},syncOffline:{backgroundColor:'#fff4e8'},syncError:{backgroundColor:'#fee9e5'},syncDot:{width:9,height:9,borderRadius:5,backgroundColor:palette.warning},syncDotOk:{backgroundColor:palette.action},syncMain:{flex:1},syncTitle:{color:palette.ink,fontSize:11,fontWeight:'800'},syncDetail:{marginTop:1,color:palette.secondary,fontSize:9},syncAction:{color:palette.action,fontSize:10,fontWeight:'800'},
   accountScroll:{padding:16,paddingBottom:40},accountHero:{padding:26,alignItems:'center',borderRadius:22,backgroundColor:palette.brand},accountHeroLabel:{color:'#c4d5cd',fontSize:9,fontWeight:'800',letterSpacing:1.3},accountHeroGym:{marginTop:8,color:palette.white,fontSize:23,fontWeight:'900',textAlign:'center'},accountCard:{marginTop:12,paddingHorizontal:17,borderWidth:1,borderColor:palette.line,borderRadius:17,backgroundColor:palette.white},accountRow:{minHeight:61,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:18,borderBottomWidth:1,borderBottomColor:'#edf0ee'},accountRowLast:{borderBottomWidth:0},accountLabel:{color:palette.secondary,fontSize:10,fontWeight:'700'},accountValue:{flex:1,color:palette.ink,fontSize:12,fontWeight:'800',textAlign:'right'},securityButton:{minHeight:69,marginTop:12,padding:13,flexDirection:'row',alignItems:'center',gap:12,borderWidth:1,borderColor:palette.line,borderRadius:15,backgroundColor:palette.white},securityIcon:{width:42,height:42,alignItems:'center',justifyContent:'center',borderRadius:13,backgroundColor:'#e5f2e9'},securityTitle:{color:palette.ink,fontSize:13,fontWeight:'900'},securityCopy:{marginTop:4,color:palette.secondary,fontSize:9},supportButton:{minHeight:69,marginTop:12,padding:13,flexDirection:'row',alignItems:'center',gap:12,borderRadius:15,backgroundColor:'#1fa855'},supportIcon:{width:42,height:42,alignItems:'center',justifyContent:'center',borderRadius:13,backgroundColor:'#ffffff24'},supportTitle:{color:palette.white,fontSize:13,fontWeight:'900'},supportCopy:{marginTop:4,color:'#e7f7ed',fontSize:9},logoutButton:{minHeight:69,marginTop:18,padding:13,flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:'#efcec9',borderRadius:15,backgroundColor:'#fff9f8'},logoutButtonPressed:{opacity:.7},logoutIcon:{width:42,height:42,marginRight:12,alignItems:'center',justifyContent:'center',borderRadius:13,backgroundColor:'#fee5e1'},logoutIconText:{color:palette.danger,fontSize:20,fontWeight:'900'},logoutTitle:{color:palette.danger,fontSize:13,fontWeight:'900'},logoutCopy:{marginTop:4,color:palette.secondary,fontSize:9},accountVersion:{marginTop:28,color:palette.secondary,fontSize:9,letterSpacing:1.2,textAlign:'center'},
   subscriptionCard:{marginTop:12,padding:17,borderWidth:1,borderColor:'#cfe3d6',borderRadius:17,backgroundColor:'#f4faf6'},subscriptionCardExpired:{borderColor:'#efc9c3',backgroundColor:'#fff8f7'},subscriptionHead:{flexDirection:'row',alignItems:'center',gap:11},subscriptionIcon:{width:43,height:43,alignItems:'center',justifyContent:'center',borderRadius:14,backgroundColor:'#e2f3e8'},subscriptionIconExpired:{backgroundColor:'#fee7e3'},subscriptionEyebrow:{color:palette.secondary,fontSize:8,fontWeight:'900',letterSpacing:.7},subscriptionName:{marginTop:4,color:palette.action,fontSize:15,fontWeight:'900'},subscriptionNameExpired:{color:palette.danger},subscriptionBadge:{paddingVertical:5,paddingHorizontal:8,borderRadius:10,backgroundColor:'#e1f4e8'},subscriptionBadgeExpired:{backgroundColor:'#fee7e3'},subscriptionBadgeText:{color:palette.action,fontSize:8,fontWeight:'900'},subscriptionBadgeTextExpired:{color:palette.danger},subscriptionDates:{marginTop:15,paddingTop:13,flexDirection:'row',alignItems:'flex-end',justifyContent:'space-between',gap:12,borderTopWidth:1,borderTopColor:'#dbe9df'},subscriptionDateLabel:{color:palette.secondary,fontSize:8,fontWeight:'900',letterSpacing:.7},subscriptionDateValue:{marginTop:5,color:palette.ink,fontSize:12,fontWeight:'800'},subscriptionRemaining:{color:palette.action,fontSize:9,fontWeight:'800'},subscriptionExpiredCopy:{marginTop:14,color:palette.danger,fontSize:10,lineHeight:15,fontWeight:'700'},whatsappButton:{height:47,marginTop:13,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:8,borderRadius:12,backgroundColor:'#1fa855'},whatsappButtonText:{color:palette.white,fontSize:11,fontWeight:'900'},
   subscriptionActionCopy:{marginTop:14,color:palette.secondary,fontSize:10,lineHeight:15,fontWeight:'700'},subscriptionActionGroup:{marginTop:13,gap:8},planRequestButton:{minHeight:47,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:8,borderRadius:12,backgroundColor:palette.action},planRequestButtonSecondary:{borderWidth:1,borderColor:'#b9d8c5',backgroundColor:'#f7fbf8'},planRequestButtonText:{color:palette.white,fontSize:11,fontWeight:'900'},planRequestButtonTextSecondary:{color:palette.action},whatsappButtonInGroup:{marginTop:0},whatsappButtonSecondary:{borderWidth:1,borderColor:'#b9d8c5',backgroundColor:'#f7fbf8'},whatsappButtonTextSecondary:{color:palette.action},
   accountPendingRequest:{marginTop:12,gap:9},accountRequestCode:{padding:11,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:10,borderRadius:10,backgroundColor:'#fff1df'},accountRequestLabel:{color:'#996018',fontSize:9,fontWeight:'900',letterSpacing:.7},accountRequestValue:{color:'#996018',fontSize:16,fontWeight:'900',letterSpacing:1},accountRequestedPlan:{color:palette.ink,fontSize:11,fontWeight:'800',textAlign:'center'},
   themeCard:{marginTop:14,padding:17,borderWidth:1,borderColor:palette.line,borderRadius:17,backgroundColor:palette.white},themeTitle:{color:palette.ink,fontSize:15,fontWeight:'900'},themeCopy:{marginTop:4,color:palette.secondary,fontSize:10,lineHeight:14},themeOptions:{marginTop:14,gap:8},themeOption:{minHeight:57,paddingHorizontal:13,flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:palette.line,borderRadius:12,backgroundColor:'#fbfcfb'},themeOptionActive:{borderColor:palette.action,backgroundColor:'#eef7e1'},themeOptionPressed:{opacity:.76},themeOptionTitle:{color:palette.ink,fontSize:12,fontWeight:'800'},themeOptionTitleActive:{color:palette.action},themeOptionCopy:{marginTop:3,color:palette.secondary,fontSize:9},themeRadio:{width:19,height:19,marginLeft:12,alignItems:'center',justifyContent:'center',borderWidth:2,borderColor:'#9aa69f',borderRadius:10},themeRadioActive:{borderColor:palette.action},themeRadioDot:{width:9,height:9,borderRadius:5,backgroundColor:palette.action},
-  scroll:{padding:16,paddingBottom:35},hero:{padding:24,borderRadius:20,backgroundColor:palette.brand},heroLabel:{color:'#c4d5cd',fontSize:10,fontWeight:'700',letterSpacing:1.3},heroValue:{marginTop:9,color:palette.white,fontSize:30,fontWeight:'800',letterSpacing:-1},heroHint:{marginTop:7,color:palette.accent,fontSize:11},metricGrid:{marginTop:12,flexDirection:'row',flexWrap:'wrap',gap:10},metric:{width:'48.3%',padding:17,borderWidth:1,borderColor:palette.line,borderRadius:15,backgroundColor:palette.white},metricWide:{width:'100%'},metricLabel:{color:palette.secondary,fontSize:11},metricValue:{marginTop:9,color:palette.ink,fontSize:21,fontWeight:'800'},
+  scroll:{padding:16,paddingBottom:35},hero:{padding:24,borderRadius:20,backgroundColor:palette.brand},heroLabel:{color:'#c4d5cd',fontSize:10,fontWeight:'700',letterSpacing:1.3},heroValue:{marginTop:9,color:palette.white,fontSize:30,fontWeight:'800',letterSpacing:-1},heroHint:{marginTop:7,color:palette.accent,fontSize:11},dashboardAttendanceAction:{marginTop:16},metricGrid:{marginTop:12,flexDirection:'row',flexWrap:'wrap',gap:10},metric:{width:'48.3%',padding:17,borderWidth:1,borderColor:palette.line,borderRadius:15,backgroundColor:palette.white},metricWide:{width:'100%'},metricLabel:{color:palette.secondary,fontSize:11},metricValue:{marginTop:9,color:palette.ink,fontSize:21,fontWeight:'800'},
   upcomingCard:{marginTop:14,padding:16,borderWidth:1,borderColor:'#f1d2b2',borderRadius:17,backgroundColor:'#fff8ef'},upcomingHead:{flexDirection:'row',alignItems:'center',gap:10},upcomingIcon:{width:38,height:38,alignItems:'center',justifyContent:'center',borderRadius:12,backgroundColor:'#ffecd3'},upcomingTitle:{color:palette.ink,fontSize:13,fontWeight:'900'},upcomingCopy:{marginTop:3,color:palette.secondary,fontSize:9},upcomingCount:{minWidth:32,height:32,paddingHorizontal:8,alignItems:'center',justifyContent:'center',borderRadius:16,backgroundColor:palette.warning},upcomingCountText:{color:palette.white,fontSize:12,fontWeight:'900'},upcomingRow:{marginTop:12,paddingTop:11,flexDirection:'row',alignItems:'center',gap:12,borderTopWidth:1,borderTopColor:'#f1d2b2'},upcomingName:{color:palette.ink,fontSize:11,fontWeight:'800'},upcomingPlan:{marginTop:3,color:palette.secondary,fontSize:9},upcomingDate:{color:palette.warning,fontSize:9,fontWeight:'900',textAlign:'right'},upcomingDays:{marginTop:3,color:palette.secondary,fontSize:8,textAlign:'right'},upcomingAction:{marginTop:13,paddingTop:12,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:6,borderTopWidth:1,borderTopColor:'#f1d2b2'},upcomingActionText:{color:palette.warning,fontSize:10,fontWeight:'900'},upcomingEmpty:{marginTop:13,color:palette.secondary,fontSize:10,textAlign:'center'},
   sectionTitle:{marginTop:26,marginBottom:10},sectionHeading:{fontSize:18,fontWeight:'800',color:palette.ink},sectionCopy:{marginTop:3,color:palette.secondary,fontSize:11},card:{overflow:'hidden',borderWidth:1,borderColor:palette.line,borderRadius:16,backgroundColor:palette.white},paymentRow:{minHeight:65,padding:14,flexDirection:'row',alignItems:'center',borderBottomWidth:1,borderBottomColor:'#edf0ee'},rowMain:{flex:1},rowTitle:{fontSize:13,fontWeight:'700',color:palette.ink},rowSubtitle:{marginTop:4,color:palette.secondary,fontSize:10},income:{color:palette.action,fontSize:12,fontWeight:'800'},empty:{padding:26,textAlign:'center',color:palette.secondary},logoutHint:{marginTop:28,textAlign:'center',color:palette.secondary,fontSize:10},
   statisticsTabs:{marginBottom:15,padding:4,flexDirection:'row',gap:4,borderWidth:1,borderColor:palette.line,borderRadius:15,backgroundColor:palette.white},statisticsTab:{minHeight:44,flex:1,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:5,borderRadius:11},statisticsTabActive:{backgroundColor:'#e8f5ce'},statisticsTabText:{color:palette.secondary,fontSize:11,fontWeight:'800'},statisticsTabTextActive:{color:palette.action},statisticsHero:{padding:20,flexDirection:'row',alignItems:'center',gap:14,borderRadius:20,backgroundColor:palette.brand},statisticsEyebrow:{color:'#c4d5cd',fontSize:10,fontWeight:'900',letterSpacing:1.1},statisticsHeroValue:{marginTop:5,color:palette.white,fontSize:34,fontWeight:'900'},statisticsHeroCopy:{marginTop:3,color:'#c4d5cd',fontSize:11},variationBadge:{maxWidth:'48%',paddingVertical:9,paddingHorizontal:11,flexDirection:'row',alignItems:'center',gap:5,borderRadius:12,backgroundColor:'#e8f5ce'},variationBadgeDown:{backgroundColor:'#fee9e5'},variationText:{color:palette.action,fontSize:11,fontWeight:'900'},variationTextDown:{color:palette.danger},statisticsCard:{padding:16,borderWidth:1,borderColor:palette.line,borderRadius:16,backgroundColor:palette.white},barList:{gap:15},barRow:{gap:6},barLabels:{flexDirection:'row',alignItems:'center',justifyContent:'space-between'},barLabel:{color:palette.secondary,fontSize:12,fontWeight:'700'},barValue:{color:palette.ink,fontSize:12,fontWeight:'900'},barTrack:{height:9,overflow:'hidden',borderRadius:5,backgroundColor:'#edf1ee'},barFill:{height:'100%',borderRadius:5,backgroundColor:palette.action},statisticsNotice:{marginTop:14,padding:13,flexDirection:'row',alignItems:'flex-start',gap:9,borderWidth:1,borderColor:'#e5ddd0',borderRadius:13,backgroundColor:'#fffbf4'},statisticsNoticeText:{flex:1,color:palette.secondary,fontSize:11,lineHeight:17,fontWeight:'600'},statusComparison:{gap:10},statusRatio:{padding:15,borderWidth:1,borderColor:palette.line,borderRadius:15,backgroundColor:palette.white},statusRatioTitle:{marginBottom:10,color:palette.ink,fontSize:13,fontWeight:'900'},ratioTrack:{height:11,overflow:'hidden',borderRadius:6,backgroundColor:'#e8ddd8'},ratioFill:{height:'100%',borderRadius:6,backgroundColor:palette.action},ratioLegend:{marginTop:9,flexDirection:'row',justifyContent:'space-between',gap:10},ratioPrimary:{flex:1,color:palette.action,fontSize:10,fontWeight:'800'},ratioSecondary:{flex:1,textAlign:'right',color:palette.secondary,fontSize:10,fontWeight:'700'},planStatisticCard:{marginBottom:10,padding:15,borderWidth:1,borderColor:palette.line,borderRadius:16,backgroundColor:palette.white},planStatisticHead:{flexDirection:'row',alignItems:'center'},planRank:{width:34,height:34,marginRight:10,alignItems:'center',justifyContent:'center',borderRadius:11,backgroundColor:'#e8f5ce'},planRankText:{color:palette.action,fontSize:13,fontWeight:'900'},planStatisticName:{color:palette.ink,fontSize:14,fontWeight:'900'},planStatisticRevenue:{marginTop:3,color:palette.action,fontSize:11,fontWeight:'800'},planStatisticGrid:{marginTop:14,paddingTop:13,flexDirection:'row',gap:8,borderTopWidth:1,borderTopColor:palette.line},statisticValue:{flex:1},statisticValueLabel:{color:palette.secondary,fontSize:8,fontWeight:'900',letterSpacing:.4},statisticValueNumber:{marginTop:5,color:palette.ink,fontSize:13,fontWeight:'900'},debtOverdue:{color:palette.danger,fontWeight:'800'},debtAmount:{marginLeft:10,color:palette.danger,fontSize:12,fontWeight:'900'},
@@ -1091,6 +1202,21 @@ const baseStyles = StyleSheet.create(withReadableType({
   periodStepper:{height:58,marginBottom:16,padding:5,flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:palette.line,borderRadius:13,backgroundColor:'#fbfcfb'},periodStepButton:{width:48,height:48,alignItems:'center',justifyContent:'center',borderRadius:10,backgroundColor:'#e8f5ce'},periodStepValue:{flex:1,alignItems:'center',justifyContent:'center'},periodStepNumber:{color:palette.ink,fontSize:18,fontWeight:'900'},periodStepCaption:{marginTop:1,color:palette.secondary,fontSize:10,fontWeight:'900',letterSpacing:.8},purchasePreview:{marginBottom:16,padding:14,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:14,borderWidth:1,borderColor:'#cfe3d6',borderRadius:13,backgroundColor:'#f4faf6'},purchasePreviewLabel:{color:palette.secondary,fontSize:10,fontWeight:'900',letterSpacing:.8},purchasePreviewValue:{marginTop:5,color:palette.action,fontSize:16,fontWeight:'900'},purchasePreviewMeta:{marginTop:3,color:palette.secondary,fontSize:11,fontWeight:'700'},purchasePreviewDate:{marginTop:5,color:palette.ink,fontSize:12,fontWeight:'900',textAlign:'right'},
   passwordInputShell:{minHeight:48,paddingLeft:14,paddingRight:2,flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:palette.line,borderRadius:11,backgroundColor:'#fafbf9'},passwordInput:{minHeight:46,flex:1,color:palette.ink,fontSize:14},passwordVisibilityButton:{width:44,height:44,alignItems:'center',justifyContent:'center',borderRadius:10},
   skeletonList:{gap:10},skeletonRow:{minHeight:80,padding:14,flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:palette.line,borderRadius:16,backgroundColor:palette.white},skeletonAvatar:{width:48,height:48,marginRight:12,borderRadius:15,backgroundColor:'#dce5df'},skeletonBody:{flex:1,gap:8},skeletonTitle:{width:'68%',height:14,borderRadius:7,backgroundColor:'#dce5df'},skeletonCopy:{width:'88%',height:10,borderRadius:5,backgroundColor:'#e5ebe7'},skeletonCopyShort:{width:'52%',height:10,borderRadius:5,backgroundColor:'#e5ebe7'},
+  memberPhotoEditor:{marginBottom:18,padding:14,flexDirection:'row',alignItems:'center',gap:14,borderWidth:1,borderColor:palette.line,borderRadius:17,backgroundColor:palette.white},
+  memberPhotoEditorAvatar:{width:88,height:88,overflow:'hidden',alignItems:'center',justifyContent:'center',borderRadius:26,backgroundColor:'#e8f5ce'},
+  memberPhotoEditorInitials:{color:palette.brand,fontSize:24,fontWeight:'900'},
+  memberPhotoEditorContent:{flex:1},
+  memberPhotoEditorTitle:{color:palette.ink,fontSize:14,fontWeight:'900'},
+  memberPhotoEditorCopy:{marginTop:4,color:palette.secondary,fontSize:9,lineHeight:14},
+  memberPhotoEditorActions:{marginTop:10,flexDirection:'row',alignItems:'center',flexWrap:'wrap',gap:7},
+  memberPhotoEditorButton:{minHeight:42,paddingHorizontal:12,alignSelf:'flex-start',flexDirection:'row',alignItems:'center',justifyContent:'center',gap:6,borderWidth:1,borderColor:'#cfe3d6',borderRadius:11,backgroundColor:'#f4faf6'},
+  memberPhotoEditorButtonText:{color:palette.action,fontSize:11,fontWeight:'900'},
+  memberPhotoEditorDeleteButton:{borderColor:'#f0cbc7',backgroundColor:'#fff8f7'},
+  memberPhotoEditorDeleteText:{color:palette.danger,fontSize:11,fontWeight:'900'},
+  memberPhotoEditorCancelButton:{minHeight:36,paddingHorizontal:5,alignItems:'center',justifyContent:'center'},
+  memberPhotoEditorCancelText:{color:palette.secondary,fontSize:10,fontWeight:'800',textDecorationLine:'underline'},
+  memberAvatarClip:{overflow:'hidden'},
+  memberAvatarImage:{...StyleSheet.absoluteFillObject,width:'100%',height:'100%'},
 }));
 
 const darkPalette = {
@@ -1102,6 +1228,8 @@ const darkStyles = StyleSheet.create({
   app:{backgroundColor:darkPalette.background},
   content:{backgroundColor:darkPalette.background},
   loginCard:{backgroundColor:darkPalette.surface},
+  verificationIcon:{backgroundColor:darkPalette.actionSoft},
+  googleLoginButton:{backgroundColor:darkPalette.surface,borderColor:darkPalette.border},googleLoginText:{color:darkPalette.text},loginDividerLine:{backgroundColor:darkPalette.border},
   topbar:{backgroundColor:darkPalette.background},
   screenTitle:{color:darkPalette.text},
   kicker:{color:palette.accent},
@@ -1382,6 +1510,15 @@ const darkStyles = StyleSheet.create({
   skeletonTitle:{backgroundColor:'#354039'},
   skeletonCopy:{backgroundColor:'#2c352f'},
   skeletonCopyShort:{backgroundColor:'#2c352f'},
+  memberPhotoEditor:{borderColor:darkPalette.border,backgroundColor:darkPalette.surface},
+  memberPhotoEditorAvatar:{backgroundColor:darkPalette.actionSoft},
+  memberPhotoEditorInitials:{color:palette.accent},
+  memberPhotoEditorTitle:{color:darkPalette.text},
+  memberPhotoEditorCopy:{color:darkPalette.secondary},
+  memberPhotoEditorButton:{borderColor:darkPalette.border,backgroundColor:darkPalette.raised},
+  memberPhotoEditorButtonText:{color:darkPalette.action},
+  memberPhotoEditorDeleteButton:{borderColor:'#5a302d',backgroundColor:'#251817'},
+  memberPhotoEditorCancelText:{color:darkPalette.secondary},
 });
 
 const styles = new Proxy(baseStyles, {

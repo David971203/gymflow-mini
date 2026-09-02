@@ -21,6 +21,7 @@ Panel web publicado en Vercel: <https://superadmin-web-eight.vercel.app>
 Incluye:
 
 - Autorregistro del dueño desde Android con creación de su gimnasio y cuenta administrativa.
+- Verificación obligatoria del correo en producción mediante código de 6 dígitos; desarrollo puede omitirla mediante configuración del backend.
 - Prueba gratuita automática de 7 días, única por teléfono móvil y dispositivo Android.
 - Solicitudes de planes mensual y anual con código P2P, contacto por WhatsApp y aprobación desde el panel.
 - Recuperación de contraseña mediante código de 6 dígitos enviado por Gmail y cambio seguro desde Cuenta.
@@ -171,6 +172,26 @@ El host, la región y el usuario del pooler deben copiarse del panel; no basta c
 cambiar el host de la URL directa. El modo sesión (puerto `5432`) admite IPv4 y
 funciona tanto para `prisma migrate deploy` como para el backend persistente.
 
+### Entornos de producción y desarrollo en Render
+
+- `main` alimenta el backend actual de producción: `https://gymflow-mini-backend.onrender.com`.
+- `desarrollo` alimenta `gymflow-mini-backend-dev` y su PostgreSQL independiente `gymflow-mini-db-dev`.
+- `render.yaml` define únicamente los recursos de desarrollo. Cada push a `desarrollo` despliega automáticamente el backend dev.
+- El contenedor aplica las migraciones antes de arrancar. En desarrollo, `SEED_DATABASE=true` mantiene disponibles los datos demo mediante un seed idempotente; producción no define esa variable.
+- La base gratuita de Render caduca 30 días después de crearla. Para conservar los datos de desarrollo hay que cambiarla a un plan de pago antes de esa fecha.
+
+Flujo recomendado para una funcionalidad nueva:
+
+```bash
+git switch desarrollo
+git pull origin desarrollo
+# trabajar, validar y publicar en desarrollo
+git push origin desarrollo
+# cuando esté aprobada, integrar desarrollo en main para producción
+```
+
+Los builds `preview` e `ios-simulator` de Expo usan el backend de desarrollo. El perfil `production` conserva siempre la URL del backend productivo.
+
 ### 2. Aplicación móvil (Android e iOS)
 
 ```bash
@@ -183,6 +204,18 @@ npm run start
 En el emulador Android, el valor por defecto `http://10.0.2.2:3100` alcanza la computadora. En un teléfono físico configura `EXPO_PUBLIC_API_URL` con la IP LAN de la computadora.
 
 Para generar un APK instalable mediante EAS: `npx eas build --platform android --profile preview`. El perfil ya está definido en `mobile/eas.json`.
+
+#### Acceso con Google
+
+El botón **Continuar con Google** sirve únicamente para entrar a una cuenta de administrador ya creada. Nunca registra usuarios ni crea gimnasios. Para habilitarlo:
+
+1. En Google Cloud configura la pantalla de consentimiento OAuth.
+2. Crea un cliente OAuth de tipo **Aplicación web**. Guarda su ID como `GOOGLE_AUTH_CLIENT_ID` en el backend y como `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` en la aplicación; ambos valores deben ser idénticos.
+3. Crea un cliente OAuth de tipo **Android** para el paquete `com.gymflow.mini.admin` y registra las huellas SHA-1 de cada certificado usado para firmar la app (desarrollo, EAS y posteriormente Google Play).
+4. Crea un cliente OAuth de tipo **iOS** para el bundle `com.gymflow.mini.admin` y guarda su ID como `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`. `app.config.js` genera automáticamente el URL scheme requerido por iOS.
+5. Configura las tres variables tanto en desarrollo como en producción y genera una compilación nueva. El inicio con Google utiliza código nativo y no funciona en Expo Go.
+
+Los ID de cliente OAuth son configuración pública, no secretos. El backend valida el token de Google, su firma, audiencia, vencimiento y correo confirmado. Solo se admiten direcciones Gmail o Google Workspace, porque en esos casos Google controla autoritativamente el correo.
 
 La versión iOS usa el bundle `com.gymflow.mini.admin`. Perfiles disponibles:
 

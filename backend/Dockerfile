@@ -8,4 +8,4 @@ COPY prisma ./prisma
 RUN npm ci
 COPY . .
 RUN npm run build
-CMD ["sh", "-c", "npm run prisma:deploy && npm run start:prod"]
+CMD ["sh", "-c", "npm run prisma:deploy && if [ \"$SEED_DATABASE\" = \"true\" ]; then npm run prisma:seed; fi && npm run start:prod"]

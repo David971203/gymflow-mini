@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: gymflow-mini-backend-dev
+    runtime: docker
+    repo: https://github.com/David971203/gymflow-mini.git
+    branch: desarrollo
+    rootDir: backend
+    plan: free
+    region: virginia
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_ENV
+        value: development
+      - key: DATABASE_URL
+        fromDatabase:
+          name: gymflow-mini-db-dev
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CORS_ORIGIN
+        value: "*"
+      - key: EMAIL_VERIFICATION_REQUIRED
+        value: "false"
+      - key: GOOGLE_AUTH_CLIENT_ID
+        sync: false
+      - key: SEED_DATABASE
+        value: "true"
+
+databases:
+  - name: gymflow-mini-db-dev
+    databaseName: gymflow_mini_dev
+    user: gymflow_mini_dev
+    plan: free
+    region: virginia

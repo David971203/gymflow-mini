@@ -220,11 +220,12 @@ export class MiniService {
   async deleteGymMember(gymId: string, id: string) {
     const member = await this.prisma.member.findFirst({ where: { id, gymId } });
     if (!member) throw new NotFoundException('Miembro no encontrado');
-    const [memberships, payments] = await Promise.all([
+    const [memberships, payments, attendances] = await Promise.all([
       this.prisma.membership.count({ where: { memberId: id } }),
       this.prisma.payment.count({ where: { memberId: id, gymId } }),
+      this.prisma.attendance.count({ where: { memberId: id, gymId } }),
     ]);
-    if (memberships > 0 || payments > 0) {
+    if (memberships > 0 || payments > 0 || attendances > 0) {
       const cancellableMemberships = await this.prisma.membership.findMany({
         where: { memberId: id, status: { in: [MembershipStatus.ACTIVE, MembershipStatus.SCHEDULED] } },
         select: { id: true },

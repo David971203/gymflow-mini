@@ -13,6 +13,7 @@ import { cancelMembershipNotifications, MEMBERSHIP_NOTIFICATION_SOURCE, supports
 import { discardSyncIssue, getSyncIssues, getSyncState, initializeOffline, offline, subscribeOffline, syncNow } from './src/offline';
 import { getTrustedClockStatus, persistTrustedClock, SUBSCRIPTION_VALIDATION_MESSAGE } from './src/trustedClock';
 import { calculateGymStatistics, type StatisticBar } from './src/statistics';
+import { AttendanceScreen } from './src/AttendanceScreen';
 import type { Currency, Dashboard, GymSubscriptionPlan, Member, Membership, MemberSex, Payment, Plan, SyncIssue, SyncState, Tab, User } from './src/types';
 
 let activeCurrency: Currency = 'CUP';
@@ -146,6 +147,7 @@ type TabIconName = React.ComponentProps<typeof Ionicons>['name'];
 const tabs: { id: Tab; icon: TabIconName; activeIcon: TabIconName; label: string; title?: string }[] = [
   { id:'INICIO', icon:'home-outline', activeIcon:'home', label:'Inicio' },
   { id:'MIEMBROS', icon:'people-outline', activeIcon:'people', label:'Miembros' },
+  { id:'ASISTENCIA', icon:'scan-outline', activeIcon:'scan', label:'Entrada', title:'Asistencia' },
   { id:'PLANES', icon:'pricetags-outline', activeIcon:'pricetags', label:'Planes' },
   { id:'CAJA', icon:'cash-outline', activeIcon:'cash', label:'Caja' },
   { id:'ESTADISTICAS', icon:'stats-chart-outline', activeIcon:'stats-chart', label:'Datos', title:'Estadísticas' },
@@ -506,12 +508,13 @@ function AdminApp({ user, dark, themePreference, onThemeChange, onLogout }: { us
     <View style={styles.content}>
       {tab === 'INICIO' && <DashboardScreen scope={scope} revision={revision} onOpenUpcoming={() => { setMemberEntryFilter('UPCOMING'); setTab('MIEMBROS'); }} />}
       {tab === 'MIEMBROS' && <MembersScreen scope={scope} revision={revision} initialFilter={memberEntryFilter} />}
+      {tab === 'ASISTENCIA' && <AttendanceScreen scope={scope} revision={revision} dark={dark} assertCanOperate={ensureActiveSubscription} onError={showError} onSuccess={showSuccess} />}
       {tab === 'PLANES' && <PlansScreen scope={scope} revision={revision} />}
       {tab === 'CAJA' && <PaymentsScreen scope={scope} revision={revision} />}
       {tab === 'ESTADISTICAS' && <StatisticsScreen scope={scope} revision={revision} />}
       {tab === 'CUENTA' && <AccountScreen user={currentUser} onUserChange={setCurrentUser} themePreference={themePreference} onThemeChange={onThemeChange} onLogout={onLogout} passwordOpen={accountPasswordOpen} onPasswordOpenChange={setAccountPasswordOpen} />}
     </View>
-    {!nestedAccountPage ? <View style={styles.tabbar}>{tabs.map((item) => { const active=tab===item.id; return <Pressable accessibilityRole="tab" accessibilityState={{selected:active}} accessibilityLabel={item.label} key={item.id} onPress={() => { if (item.id === 'MIEMBROS') setMemberEntryFilter('ALL'); setTab(item.id); }} style={({pressed}) => [styles.tab,pressed&&styles.tabPressed]}><View style={[styles.tabIconWrap,active&&styles.tabIconWrapActive]}><Ionicons name={active?item.activeIcon:item.icon} size={21} color={active?(activeDarkTheme?'#c9f47b':'#1d6b4d'):(activeDarkTheme?'#adb7b1':'#657169')}/></View><Text style={[styles.tabLabel,active&&styles.tabActive]}>{item.label}</Text></Pressable>;})}</View> : null}
+    {!nestedAccountPage ? <View style={styles.tabbar}>{tabs.map((item) => { const active=tab===item.id; return <Pressable accessibilityRole="tab" accessibilityState={{selected:active}} accessibilityLabel={item.label} key={item.id} onPress={() => { if (item.id === 'MIEMBROS') setMemberEntryFilter('ALL'); setTab(item.id); }} style={({pressed}) => [styles.tab,pressed&&styles.tabPressed]}><View style={[styles.tabIconWrap,active&&styles.tabIconWrapActive]}><Ionicons name={active?item.activeIcon:item.icon} size={21} color={active?(activeDarkTheme?'#c9f47b':'#1d6b4d'):(activeDarkTheme?'#adb7b1':'#657169')}/></View><Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72} style={[styles.tabLabel,active&&styles.tabActive]}>{item.label}</Text></Pressable>;})}</View> : null}
     <SyncIssues open={issuesOpen} scope={scope} revision={revision} onClose={() => setIssuesOpen(false)} />
   </SafeAreaView>;
 }
@@ -939,7 +942,7 @@ function SyncIssues({ open, scope, revision, onClose }: { open: boolean; scope: 
   const [issues, setIssues] = useState<SyncIssue[]>([]);
   const load = useCallback(() => { void getSyncIssues(scope).then(setIssues).catch(showError); }, [scope]);
   useEffect(() => { if (open) load(); }, [open, revision, load]);
-  const names: Record<SyncIssue['type'], string> = { MEMBER_CREATE: 'Registrar miembro', MEMBER_UPDATE: 'Editar miembro', MEMBER_DELETE: 'Eliminar miembro', PLAN_CREATE: 'Crear plan', PLAN_UPDATE: 'Editar plan', PLAN_DELETE: 'Eliminar plan', MEMBERSHIP_ASSIGN: 'Asignar plan', MEMBERSHIP_UPDATE: 'Editar membresía', MEMBERSHIP_RENEW: 'Renovar plan', MEMBERSHIP_DELETE: 'Eliminar renovación', PAYMENT_APPLY: 'Registrar cobro' };
+  const names: Record<SyncIssue['type'], string> = { MEMBER_CREATE: 'Registrar miembro', MEMBER_UPDATE: 'Editar miembro', MEMBER_DELETE: 'Eliminar miembro', PLAN_CREATE: 'Crear plan', PLAN_UPDATE: 'Editar plan', PLAN_DELETE: 'Eliminar plan', MEMBERSHIP_ASSIGN: 'Asignar plan', MEMBERSHIP_UPDATE: 'Editar membresía', MEMBERSHIP_RENEW: 'Renovar plan', MEMBERSHIP_DELETE: 'Eliminar renovación', PAYMENT_APPLY: 'Registrar cobro', ATTENDANCE_CHECK_IN: 'Registrar entrada', ATTENDANCE_CHECK_OUT: 'Registrar salida' };
   return <Sheet open={open} title="Cambios por revisar" onClose={onClose}>
     <Text style={styles.sheetCopy}>El servidor rechazó estos cambios. Los datos válidos ya fueron sincronizados.</Text>
     {issues.map((issue) => <View key={issue.id} style={styles.issueCard}><Text style={styles.issueTitle}>{names[issue.type]}</Text><Text style={styles.issueDate}>{new Date(issue.occurredAt).toLocaleString('es-CU')}</Text><Text style={styles.issueError}>{issue.error}</Text><Pressable onPress={() => discardSyncIssue(scope, issue.id).then(load).catch(showError)}><Text style={styles.discard}>Descartar aviso</Text></Pressable></View>)}

@@ -268,6 +268,7 @@ describe('MiniService', () => {
         findMany:jest.fn().mockResolvedValue([{ id:'membership-active' }, { id:'membership-scheduled' }]),
       },
       payment: { count:jest.fn().mockResolvedValue(2) },
+      attendance: { count:jest.fn().mockResolvedValue(0) },
       $transaction:jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
     };
     const service = new MiniService(prisma as never);
@@ -295,6 +296,7 @@ describe('MiniService', () => {
       member: { findFirst: jest.fn().mockResolvedValue({ id: 'member-1' }), delete: remove },
       membership: { count: jest.fn().mockResolvedValue(0) },
       payment: { count: jest.fn().mockResolvedValue(0) },
+      attendance: { count: jest.fn().mockResolvedValue(0) },
     };
     const service = new MiniService(prisma as never);
     await expect(service.deleteGymMember('gym-1', 'member-1')).resolves.toEqual({ id: 'member-1', disposition: 'DELETED' });

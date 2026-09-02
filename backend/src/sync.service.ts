@@ -3,6 +3,8 @@ import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import type { Prisma } from '@prisma/client';
 import type { AuthUser } from './common';
+import { CheckInAttendanceDto, CheckOutAttendanceDto } from './attendance.dto';
+import { AttendanceService } from './attendance.service';
 import {
   ApplyPaymentDto,
   CreateMemberDto,
@@ -29,7 +31,7 @@ type SyncResult = {
 
 @Injectable()
 export class SyncService {
-  constructor(private readonly prisma: PrismaService, private readonly mini: MiniService) {}
+  constructor(private readonly prisma: PrismaService, private readonly mini: MiniService, private readonly attendance: AttendanceService) {}
 
   async push(dto: SyncPushDto, user: AuthUser) {
     if (!user.gymId) throw new BadRequestException('El usuario no pertenece a un gimnasio');
@@ -53,13 +55,14 @@ export class SyncService {
   }
 
   async snapshot(user: AuthUser) {
-    const [dashboard, members, plans, payments] = await Promise.all([
+    const [dashboard, members, plans, payments, attendances] = await Promise.all([
       this.mini.adminDashboard(user),
       this.mini.listMembers(user),
       this.mini.listPlans(user),
       this.mini.listPayments(user),
+      this.attendance.snapshot(user),
     ]);
-    return { dashboard, members, plans, payments, serverTime: new Date().toISOString() };
+    return { dashboard, members, plans, payments, attendances, serverTime: new Date().toISOString() };
   }
 
   private async process(operation: SyncOperationDto, user: AuthUser): Promise<SyncResult> {
@@ -155,6 +158,16 @@ export class SyncService {
         const dto = await this.payload(ApplyPaymentDto, { ...operation.payload, clientMutationId: operation.id, occurredAt: operation.occurredAt });
         const payment = await this.mini.applyPayment(operation.entityId, dto, user);
         return { status: 'APPLIED', result: { id: payment.id } };
+      }
+      case 'ATTENDANCE_CHECK_IN': {
+        const dto = await this.payload(CheckInAttendanceDto, { ...operation.payload, clientAttendanceId: operation.entityId, clientMutationId: operation.id, occurredAt: operation.occurredAt });
+        const attendance = await this.attendance.checkIn(dto, user);
+        return { status: 'APPLIED', result: { id: attendance.id } };
+      }
+      case 'ATTENDANCE_CHECK_OUT': {
+        const dto = await this.payload(CheckOutAttendanceDto, { ...operation.payload, clientMutationId: operation.id, occurredAt: operation.occurredAt });
+        const attendance = await this.attendance.checkOut(operation.entityId, dto, user);
+        return { status: 'APPLIED', result: { id: attendance.id } };
       }
     }
   }

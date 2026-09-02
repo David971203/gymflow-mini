@@ -14,7 +14,7 @@ describe('SyncService', () => {
   it('devuelve el recibo anterior y no repite una operación aplicada', async () => {
     const prisma = { syncReceipt: { findUnique: jest.fn().mockResolvedValue({ ...operation, gymId: 'gym-1', status: 'APPLIED', result: { id: operation.entityId }, message: null }) } };
     const mini = { createMember: jest.fn() };
-    const service = new SyncService(prisma as never, mini as never);
+    const service = new SyncService(prisma as never, mini as never, {} as never);
 
     const response = await service.push({ operations: [operation] }, user);
 
@@ -36,7 +36,8 @@ describe('SyncService', () => {
       findMemberByCi: jest.fn().mockResolvedValue({ id: canonicalId }),
       createMembership: jest.fn().mockResolvedValue({ id: '55555555-5555-4555-8555-555555555555', payment: { id: '66666666-6666-4666-8666-666666666666' } }),
     };
-    const service = new SyncService(prisma as never, mini as never);
+    const attendance = { checkIn: jest.fn().mockResolvedValue({ id: '99999999-9999-4999-8999-999999999999' }) };
+    const service = new SyncService(prisma as never, mini as never, attendance as never);
     const assign = {
       id: '44444444-4444-4444-8444-444444444444',
       type: 'MEMBERSHIP_ASSIGN' as const,
@@ -44,12 +45,20 @@ describe('SyncService', () => {
       occurredAt: operation.occurredAt,
       payload: { memberId: operation.entityId, planId: '77777777-7777-4777-8777-777777777777', clientPaymentId: '66666666-6666-4666-8666-666666666666' },
     };
+    const checkIn = {
+      id: '88888888-8888-4888-8888-888888888888',
+      type: 'ATTENDANCE_CHECK_IN' as const,
+      entityId: '99999999-9999-4999-8999-999999999999',
+      occurredAt: operation.occurredAt,
+      payload: { memberId: operation.entityId, method: 'MANUAL' },
+    };
 
-    const response = await service.push({ operations: [operation, assign] }, user);
+    const response = await service.push({ operations: [operation, assign, checkIn] }, user);
 
     expect(response.results[0].status).toBe('MERGED');
     expect(mini.createMembership).toHaveBeenCalledWith(expect.objectContaining({ memberId: canonicalId }), user);
-    expect(receipts).toHaveLength(2);
+    expect(attendance.checkIn).toHaveBeenCalledWith(expect.objectContaining({ memberId: canonicalId, clientAttendanceId: checkIn.entityId, clientMutationId: checkIn.id }), user);
+    expect(receipts).toHaveLength(3);
   });
 
   it('sincroniza la edición offline de una membresía', async () => {
@@ -67,7 +76,7 @@ describe('SyncService', () => {
       },
     };
     const mini = { updateMembership: jest.fn().mockResolvedValue({ id: updateOperation.entityId }) };
-    const service = new SyncService(prisma as never, mini as never);
+    const service = new SyncService(prisma as never, mini as never, {} as never);
 
     const response = await service.push({ operations: [updateOperation] }, user);
 
@@ -90,7 +99,7 @@ describe('SyncService', () => {
       },
     };
     const mini = { deleteMembership: jest.fn().mockResolvedValue({ id: deleteOperation.entityId, disposition: 'DELETED' }) };
-    const service = new SyncService(prisma as never, mini as never);
+    const service = new SyncService(prisma as never, mini as never, {} as never);
 
     const response = await service.push({ operations: [deleteOperation] }, user);
 
@@ -113,7 +122,7 @@ describe('SyncService', () => {
       },
     };
     const mini = { deleteMember: jest.fn().mockResolvedValue({ id: deleteOperation.entityId, disposition: 'DELETED' }) };
-    const service = new SyncService(prisma as never, mini as never);
+    const service = new SyncService(prisma as never, mini as never, {} as never);
 
     const response = await service.push({ operations: [deleteOperation] }, user);
 
@@ -136,7 +145,7 @@ describe('SyncService', () => {
       },
     };
     const mini = { deletePlan: jest.fn().mockResolvedValue({ id: deleteOperation.entityId, disposition: 'ARCHIVED' }) };
-    const service = new SyncService(prisma as never, mini as never);
+    const service = new SyncService(prisma as never, mini as never, {} as never);
 
     const response = await service.push({ operations: [deleteOperation] }, user);
 

@@ -2,7 +2,7 @@ import * as Network from 'expo-network';
 import * as SQLite from 'expo-sqlite';
 import { api, ApiError } from './api';
 import { initializeTrustedClock, recordServerTime } from './trustedClock';
-import type { Dashboard, Member, Membership, Movement, Payment, Plan, SyncIssue, SyncOperation, SyncOperationType, SyncSnapshot, SyncState } from './types';
+import type { Attendance, Dashboard, Member, Membership, Movement, Payment, Plan, SyncIssue, SyncOperation, SyncOperationType, SyncSnapshot, SyncState } from './types';
 
 const dbPromise = SQLite.openDatabaseAsync('gymflow-mini-offline.db');
 const listeners = new Set<() => void>();
@@ -51,7 +51,7 @@ export async function initializeOffline(scope: string) {
     );
     CREATE INDEX IF NOT EXISTS sync_outbox_scope_status_idx ON sync_outbox(scope, status, occurred_at);
   `);
-  for (const [key, fallback] of [['members', []], ['plans', []], ['payments', []]] as const) {
+  for (const [key, fallback] of [['members', []], ['plans', []], ['payments', []], ['attendances', []]] as const) {
     const existing = await readCache<unknown>(scope, key, null);
     if (existing === null) await writeCache(scope, key, fallback);
   }
@@ -106,6 +106,7 @@ export const offline = {
   members: (scope: string) => readCache<Member[]>(scope, 'members', []),
   plans: (scope: string) => readCache<Plan[]>(scope, 'plans', []),
   payments: (scope: string) => readCache<Payment[]>(scope, 'payments', []),
+  attendances: (scope: string) => readCache<Attendance[]>(scope, 'attendances', []),
 
   async dashboard(scope: string): Promise<Dashboard> {
     const [members, payments] = await Promise.all([offline.members(scope), offline.payments(scope)]);
@@ -131,14 +132,14 @@ export const offline = {
   async createMember(scope: string, input: Pick<Member, 'ci' | 'firstName' | 'lastName'> & Partial<Pick<Member, 'code' | 'age' | 'sex' | 'phone' | 'address'>>) {
     await waitForActiveSync(scope);
     const database = await db();
-    const id = uuid(); const operationId = uuid(); const occurredAt = new Date().toISOString();
+    const id = uuid(); const qrCode = uuid(); const operationId = uuid(); const occurredAt = new Date().toISOString();
     await database.withTransactionAsync(async () => {
       const members = await offline.members(scope);
       if (members.some((member) => member.ci === input.ci)) throw new Error('Ya existe un miembro local con ese carnet de identidad');
       if (input.code && members.some((member) => member.code === input.code)) throw new Error('Ya existe un miembro local con ese código interno');
-      members.unshift({ id, ...input, status: 'ACTIVE', joinedAt: occurredAt, memberships: [] });
+      members.unshift({ id, qrCode, ...input, status: 'ACTIVE', joinedAt: occurredAt, memberships: [] });
       await writeCache(scope, 'members', members);
-      await enqueue(scope, { id: operationId, type: 'MEMBER_CREATE', entityId: id, payload: input, occurredAt });
+      await enqueue(scope, { id: operationId, type: 'MEMBER_CREATE', entityId: id, payload: { ...input, qrCode }, occurredAt });
     });
     await updateState(scope, 'OFFLINE'); emit(); void syncNow(scope);
     return id;
@@ -161,10 +162,10 @@ export const offline = {
     await waitForActiveSync(scope);
     const database = await db(); const operationId = uuid(); const occurredAt = new Date().toISOString();
     await database.withTransactionAsync(async () => {
-      const [members, payments] = await Promise.all([offline.members(scope), offline.payments(scope)]);
+      const [members, payments, attendances] = await Promise.all([offline.members(scope), offline.payments(scope), offline.attendances(scope)]);
       const member = members.find((item) => item.id === id);
       if (!member) throw new Error('Miembro no encontrado en este dispositivo');
-      const hasHistory = member.memberships.length > 0 || payments.some((payment) => payment.member.id === id);
+      const hasHistory = member.memberships.length > 0 || payments.some((payment) => payment.member.id === id) || attendances.some((attendance) => attendance.memberId === id);
       if (hasHistory) {
         const membershipsToCancel = member.memberships.filter((membership) => membership.status === 'ACTIVE' || membership.status === 'SCHEDULED');
         const membershipIds = new Set(membershipsToCancel.map((membership) => membership.id));
@@ -353,6 +354,49 @@ export const offline = {
     });
     await updateState(scope, 'OFFLINE'); emit(); void syncNow(scope);
   },
+
+  async checkIn(scope: string, input: { memberId: string; method: 'QR' | 'MANUAL' }) {
+    await waitForActiveSync(scope);
+    const database = await db(); const attendanceId = uuid(); const operationId = uuid(); const occurredAt = new Date().toISOString();
+    let created: Attendance | undefined;
+    await database.withTransactionAsync(async () => {
+      const [members, attendances] = await Promise.all([offline.members(scope), offline.attendances(scope)]);
+      const member = members.find((item) => item.id === input.memberId);
+      if (!member) throw new Error('Miembro no encontrado en este dispositivo');
+      if (member.status !== 'ACTIVE') throw new Error('El miembro está inactivo y no puede registrar asistencia');
+      const at = new Date(occurredAt).getTime();
+      const hasMembership = member.memberships.some((membership) => membership.status === 'ACTIVE' && new Date(membership.startDate).getTime() <= at && new Date(membership.endDate).getTime() >= at);
+      if (!hasMembership) throw new Error('El miembro no tiene una membresía vigente');
+      if (attendances.some((attendance) => attendance.memberId === member.id && !attendance.checkOutAt)) throw new Error('El miembro ya tiene una entrada abierta');
+      created = { id: attendanceId, memberId: member.id, checkInAt: occurredAt, checkOutAt: null, method: input.method, member: { id: member.id, firstName: member.firstName, lastName: member.lastName, status: member.status, qrCode: member.qrCode } };
+      attendances.unshift(created);
+      await writeCache(scope, 'attendances', attendances);
+      await enqueue(scope, { id: operationId, type: 'ATTENDANCE_CHECK_IN', entityId: attendanceId, payload: input, occurredAt });
+    });
+    await updateState(scope, 'OFFLINE'); emit(); void syncNow(scope);
+    return created as Attendance;
+  },
+
+  async checkInByQr(scope: string, qrCode: string) {
+    const member = (await offline.members(scope)).find((item) => item.qrCode?.toLowerCase() === qrCode.trim().toLowerCase());
+    if (!member) throw new Error('No se encontró un miembro válido con ese código QR');
+    return offline.checkIn(scope, { memberId: member.id, method: 'QR' });
+  },
+
+  async checkOut(scope: string, attendanceId: string) {
+    await waitForActiveSync(scope);
+    const database = await db(); const operationId = uuid(); const occurredAt = new Date().toISOString();
+    await database.withTransactionAsync(async () => {
+      const attendances = await offline.attendances(scope);
+      const attendance = attendances.find((item) => item.id === attendanceId);
+      if (!attendance) throw new Error('Registro de asistencia no encontrado en este dispositivo');
+      if (attendance.checkOutAt) throw new Error('La salida ya fue registrada');
+      attendance.checkOutAt = occurredAt;
+      await writeCache(scope, 'attendances', attendances);
+      await enqueue(scope, { id: operationId, type: 'ATTENDANCE_CHECK_OUT', entityId: attendanceId, payload: {}, occurredAt });
+    });
+    await updateState(scope, 'OFFLINE'); emit(); void syncNow(scope);
+  },
 };
 
 export async function getSyncIssues(scope: string): Promise<SyncIssue[]> {
@@ -398,6 +442,7 @@ async function applySnapshot(scope: string, snapshot: SyncSnapshot) {
     await writeCache(scope, 'members', snapshot.members);
     await writeCache(scope, 'plans', snapshot.plans);
     await writeCache(scope, 'payments', snapshot.payments);
+    await writeCache(scope, 'attendances', snapshot.attendances);
     await writeCache(scope, 'serverDashboard', snapshot.dashboard);
   });
 }

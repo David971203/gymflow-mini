@@ -51,6 +51,11 @@ enum PaymentMethod {
   OTHER
 }
 
+enum AttendanceMethod {
+  QR
+  MANUAL
+}
+
 model Gym {
   id                    String               @id @default(uuid())
   name                  String
@@ -70,21 +75,22 @@ model Gym {
   members               Member[]
   plans                 Plan[]
   payments              Payment[]
+  attendances           Attendance[]
   syncReceipts          SyncReceipt[]
   platformSubscriptions PlatformSubscription[]
-  subscriptionRequests   SubscriptionRequest[]
-  trialClaim             TrialClaim?
+  subscriptionRequests  SubscriptionRequest[]
+  trialClaim            TrialClaim?
 }
 
 model SubscriptionRequest {
-  id         String                    @id @default(uuid())
-  code       String                    @unique
-  gymId      String
-  gym        Gym                       @relation(fields: [gymId], references: [id], onDelete: Cascade)
-  plan       GymSubscriptionPlan
-  status     SubscriptionRequestStatus @default(PENDING)
-  requestedAt DateTime                 @default(now())
-  resolvedAt DateTime?
+  id          String                    @id @default(uuid())
+  code        String                    @unique
+  gymId       String
+  gym         Gym                       @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  plan        GymSubscriptionPlan
+  status      SubscriptionRequestStatus @default(PENDING)
+  requestedAt DateTime                  @default(now())
+  resolvedAt  DateTime?
 
   @@index([status, requestedAt])
   @@index([gymId, requestedAt])
@@ -126,22 +132,22 @@ model User {
   isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
 
-  movements    PaymentMovement[]
-  syncReceipts SyncReceipt[]
+  movements          PaymentMovement[]
+  syncReceipts       SyncReceipt[]
   passwordResetCodes PasswordResetCode[]
 
   @@index([gymId])
 }
 
 model PasswordResetCode {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   codeHash  String
   expiresAt DateTime
-  attempts  Int      @default(0)
+  attempts  Int       @default(0)
   usedAt    DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   @@index([userId, createdAt])
   @@index([expiresAt])
@@ -161,6 +167,7 @@ model Member {
   sex       String?
   phone     String?
   address   String?
+  qrCode    String       @unique @default(uuid())
   status    MemberStatus @default(ACTIVE)
   joinedAt  DateTime     @default(now())
   createdAt DateTime     @default(now())
@@ -168,11 +175,29 @@ model Member {
 
   memberships Membership[]
   payments    Payment[]
+  attendances Attendance[]
 
   @@unique([gymId, ci])
   @@unique([gymId, code])
   @@index([gymId])
   @@index([status])
+}
+
+model Attendance {
+  id               String           @id @default(uuid())
+  gymId            String
+  gym              Gym              @relation(fields: [gymId], references: [id])
+  memberId         String
+  member           Member           @relation(fields: [memberId], references: [id])
+  checkInAt        DateTime         @default(now())
+  checkOutAt       DateTime?
+  method           AttendanceMethod @default(MANUAL)
+  clientCheckInId  String?          @unique
+  clientCheckOutId String?          @unique
+  createdAt        DateTime         @default(now())
+
+  @@index([gymId, checkInAt])
+  @@index([memberId, checkInAt])
 }
 
 model Plan {

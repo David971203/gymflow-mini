@@ -155,6 +155,7 @@ type ThemePreference = 'system' | 'light' | 'dark';
 const THEME_STORAGE_KEY = 'gymflow_mini_theme';
 const SHOW_THEME_SELECTOR = false;
 const SHOW_SCHEDULED_MEMBERSHIP_UI = false;
+const SHOW_ATTENDANCE_ENTRY = false;
 const PROFILE_REFRESH_INTERVAL_MS = 30_000;
 let activeDarkTheme = false;
 const KeyboardScrollContext = createContext<((target: number) => void) | null>(null);
@@ -536,7 +537,7 @@ function DashboardScreen({ scope, revision, onOpenAttendance, onOpenUpcoming }: 
   if (loading && !data) return <ScrollView contentContainerStyle={styles.scroll}><LoadingSkeleton rows={6}/></ScrollView>;
   return <ScrollView refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} colors={[activeDarkTheme ? '#c9f47b' : '#1d6b4d']} tintColor={activeDarkTheme ? '#c9f47b' : '#1d6b4d'} progressBackgroundColor={activeDarkTheme ? '#212923' : '#fff'} />} contentContainerStyle={styles.scroll}>
     <View style={styles.hero}><Text style={styles.heroLabel}>INGRESOS DE {monthName}</Text><Text style={styles.heroValue}>{money(data?.monthlyRevenue ?? 0)}</Text><Text style={styles.heroHint}>Dinero realmente cobrado</Text></View>
-    <View style={styles.dashboardAttendanceAction}><PrimaryButton label="Registrar entrada" icon="scan-outline" onPress={onOpenAttendance}/></View>
+    {SHOW_ATTENDANCE_ENTRY ? <View style={styles.dashboardAttendanceAction}><PrimaryButton label="Registrar entrada" icon="scan-outline" onPress={onOpenAttendance}/></View> : null}
     <View style={styles.metricGrid}><Metric label="Miembros" value={data?.members ?? 0} /><Metric label="Membresías activas" value={data?.activeMemberships ?? 0} /><Metric label="Por cobrar" value={money(data?.pendingDebt ?? 0)} wide /></View>
     <View style={styles.upcomingCard}><View style={styles.upcomingHead}><View style={styles.upcomingIcon}><Ionicons name="time-outline" size={20} color={palette.warning}/></View><View style={styles.rowMain}><Text style={styles.upcomingTitle}>Membresías próximas a vencer</Text><Text style={styles.upcomingCopy}>En los próximos 10 días</Text></View><View style={styles.upcomingCount}><Text style={styles.upcomingCountText}>{upcoming.length}</Text></View></View>{upcoming.slice(0,4).map(({member,membership}) => <View key={membership.id} style={styles.upcomingRow}><View style={styles.rowMain}><Text numberOfLines={1} ellipsizeMode="tail" style={styles.upcomingName}>{member.firstName} {member.lastName}</Text><Text numberOfLines={1} ellipsizeMode="tail" style={styles.upcomingPlan}>{contractedPlan(membership).name}</Text></View><View><Text style={styles.upcomingDate}>{formatDate(membership.endDate)}</Text><Text style={styles.upcomingDays}>{remainingDaysLabel(membership.endDate)}</Text></View></View>)}{upcoming.length ? <Pressable accessibilityRole="button" onPress={onOpenUpcoming} style={({pressed}) => [styles.upcomingAction,styles.minTouch,pressed&&styles.tabPressed]}><Text style={styles.upcomingActionText}>Ver y gestionar en Miembros</Text><Ionicons name="arrow-forward" size={17} color={palette.warning}/></Pressable> : <Text style={styles.upcomingEmpty}>No hay vencimientos cercanos.</Text>}</View>
     <SectionTitle title="Últimos cobros" subtitle="Movimientos registrados por el gimnasio" />

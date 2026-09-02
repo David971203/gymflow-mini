@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, AppState, BackHandler, Easing, FlatList, Image, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, useColorScheme, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, AppState, BackHandler, Easing, FlatList, Image, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, TurboModuleRegistry, useColorScheme, View } from 'react-native';
 import * as Network from 'expo-network';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
@@ -8,7 +8,6 @@ import * as SecureStore from 'expo-secure-store';
 import { Directory, File, Paths } from 'expo-file-system';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
-import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import writeExcelFile, { type SheetData } from 'write-excel-file/universal';
 import { api } from './src/api';
@@ -26,6 +25,10 @@ let activeSubscriptionTrialDays = 7;
 const renewalMessage = 'Para continuar debes renovar la membresía de tu gimnasio.';
 const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID?.trim() ?? '';
 const googleIosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID?.trim() ?? '';
+const googleSignin = TurboModuleRegistry.get('RNGoogleSignin')
+  ? (require('@react-native-google-signin/google-signin') as typeof import('@react-native-google-signin/google-signin')).GoogleSignin
+  : null;
+const googleLoginAvailable = Boolean(googleSignin && googleWebClientId);
 const configuredRenewalWhatsApp = (process.env.EXPO_PUBLIC_RENEWAL_WHATSAPP ?? '').replace(/\D/g,'');
 const renewalWhatsApp = configuredRenewalWhatsApp.length === 8 ? `53${configuredRenewalWhatsApp}` : configuredRenewalWhatsApp;
 const money = (value: number | string) => `${Number(value).toLocaleString('es-CU', { maximumFractionDigits: 2 })} ${activeCurrency}`;
@@ -314,7 +317,7 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
     return () => { showSubscription.remove(); hideSubscription.remove(); };
   }, [scrollLoginFormAboveKeyboard]);
   useEffect(() => {
-    if (googleWebClientId) GoogleSignin.configure({ webClientId:googleWebClientId, ...(googleIosClientId ? { iosClientId:googleIosClientId } : {}), offlineAccess:false });
+    if (googleLoginAvailable) googleSignin?.configure({ webClientId:googleWebClientId, ...(googleIosClientId ? { iosClientId:googleIosClientId } : {}), offlineAccess:false });
   }, []);
   const submit = async () => {
     setLoading(true);
@@ -323,11 +326,11 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
     finally { setLoading(false); }
   };
   const loginWithGoogle = async () => {
-    if (!googleWebClientId) { showError(new Error('El acceso con Google todavía no está configurado')); return; }
+    if (!googleSignin || !googleWebClientId) { showError(new Error('El acceso con Google requiere la aplicación instalada')); return; }
     setGoogleLoading(true);
     try {
-      if (Platform.OS === 'android') await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog:true });
-      const result = await GoogleSignin.signIn();
+      if (Platform.OS === 'android') await googleSignin.hasPlayServices({ showPlayServicesUpdateDialog:true });
+      const result = await googleSignin.signIn();
       if (result.type !== 'success') return;
       if (!result.data.idToken) throw new Error('Google no devolvió una credencial válida');
       onLogin(await api.googleLogin(result.data.idToken));
@@ -352,8 +355,10 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
           <PasswordField value={password} onChangeText={setPassword} visible={passwordVisible} onToggleVisibility={() => setPasswordVisible(value => !value)} onSubmit={() => void submit()} />
           <Pressable accessibilityRole="button" onPress={() => setRecoveringPassword(true)} style={styles.forgotPasswordButton}><Text style={styles.forgotPasswordText}>¿Olvidaste tu contraseña?</Text></Pressable>
           <PrimaryButton label={loading ? 'Entrando…' : 'Entrar'} onPress={submit} disabled={loading || !email.trim() || !password} />
-          <View style={styles.loginDivider}><View style={styles.loginDividerLine}/><Text style={styles.loginDividerText}>o</Text><View style={styles.loginDividerLine}/></View>
-          <Pressable accessibilityRole="button" accessibilityLabel="Continuar con Google" accessibilityState={{disabled:loading||googleLoading}} disabled={loading||googleLoading} onPress={()=>void loginWithGoogle()} style={({pressed})=>[styles.googleLoginButton,(loading||googleLoading)&&styles.disabled,pressed&&styles.tabPressed]}>{googleLoading?<ActivityIndicator color="#173f31"/>:<Ionicons name="logo-google" size={20} color="#4285F4"/>}<Text style={styles.googleLoginText}>{googleLoading?'Conectando…':'Continuar con Google'}</Text></Pressable>
+          {googleLoginAvailable ? <>
+            <View style={styles.loginDivider}><View style={styles.loginDividerLine}/><Text style={styles.loginDividerText}>o</Text><View style={styles.loginDividerLine}/></View>
+            <Pressable accessibilityRole="button" accessibilityLabel="Continuar con Google" accessibilityState={{disabled:loading||googleLoading}} disabled={loading||googleLoading} onPress={()=>void loginWithGoogle()} style={({pressed})=>[styles.googleLoginButton,(loading||googleLoading)&&styles.disabled,pressed&&styles.tabPressed]}>{googleLoading?<ActivityIndicator color="#173f31"/>:<Ionicons name="logo-google" size={20} color="#4285F4"/>}<Text style={styles.googleLoginText}>{googleLoading?'Conectando…':'Continuar con Google'}</Text></Pressable>
+          </> : null}
         </View>
         <View style={styles.loginJoin}>
           <Text style={styles.loginJoinText}>¿Eres dueño de un Gimnasio y no tienes una cuenta?</Text>

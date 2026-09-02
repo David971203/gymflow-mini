@@ -10,7 +10,7 @@ export class RegisterDto {
   @IsString() @MaxLength(100) ownerName: string;
   @IsString() @MaxLength(100) gymName: string;
   @IsOptional() @IsString() @MaxLength(100) province?: string;
-  @IsString() @Matches(/^\+?[\d\s()-]{8,20}$/, { message: 'Introduce un teléfono cubano válido' }) phone: string;
+  @IsString() @Matches(/^\d{8}$/, { message: 'El teléfono móvil debe tener exactamente 8 dígitos' }) phone: string;
   @IsEmail() email: string;
   @IsString() @MinLength(8) password: string;
   @IsString() @MinLength(12) @MaxLength(200) deviceId: string;

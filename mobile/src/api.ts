@@ -10,7 +10,7 @@ const DEVICE_KEY = 'gymflow_mini_installation_id';
 const OFFLINE_SESSION_MS = 14 * 24 * 60 * 60 * 1000;
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number) { super(message); }
+  constructor(message: string, readonly status: number, readonly code?: string) { super(message); }
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -21,7 +21,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     headers: { ...(!multipart ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options?.headers },
   });
   const data = await response.json().catch(() => null);
-  if (!response.ok) throw new ApiError(Array.isArray(data?.message) ? data.message.join(', ') : data?.message ?? 'No se pudo completar la operación', response.status);
+  if (!response.ok) throw new ApiError(Array.isArray(data?.message) ? data.message.join(', ') : data?.message ?? 'No se pudo completar la operación', response.status, typeof data?.code === 'string' ? data.code : undefined);
   return data as T;
 }
 
@@ -65,9 +65,12 @@ export const api = {
     return persistSession(result);
   },
   register: async (input: { ownerName: string; gymName: string; province?: string; phone: string; email: string; password: string }) => {
-    const result = await request<{ accessToken: string; user: User }>('/auth/register', { method: 'POST', body: JSON.stringify({ ...input, deviceId: await deviceId() }) });
-    return persistSession(result);
+    const result = await request<{ accessToken: string; user: User } | { verificationRequired: true; email: string; message: string; retryAfterSeconds: number }>('/auth/register', { method: 'POST', body: JSON.stringify({ ...input, deviceId: await deviceId() }) });
+    if ('verificationRequired' in result) return result;
+    return { verificationRequired:false as const, user:await persistSession(result) };
   },
+  verifyEmail: async (email: string, code: string) => persistSession(await request<{ accessToken: string; user: User }>('/auth/email/verify', { method:'POST', body:JSON.stringify({ email, code }) })),
+  resendEmailVerification: (email: string) => request<{ message:string; retryAfterSeconds:number }>('/auth/email/resend', { method:'POST', body:JSON.stringify({ email }) }),
   selectSubscription: async (plan: 'TRIAL' | 'MONTHLY' | 'ANNUAL') => {
     const result = await request<{ user: User }>('/auth/subscription', { method: 'POST', body: JSON.stringify({ plan, deviceId: await deviceId() }) });
     return persistSession(result);

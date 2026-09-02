@@ -10,7 +10,7 @@ import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import writeExcelFile, { type SheetData } from 'write-excel-file/universal';
-import { api } from './src/api';
+import { api, ApiError } from './src/api';
 import { cancelMembershipNotifications, MEMBERSHIP_NOTIFICATION_SOURCE, supportsMembershipNotifications, syncMembershipNotifications } from './src/notifications';
 import { discardSyncIssue, getSyncIssues, getSyncState, initializeOffline, offline, subscribeOffline, syncNow } from './src/offline';
 import { getTrustedClockStatus, persistTrustedClock, SUBSCRIPTION_VALIDATION_MESSAGE } from './src/trustedClock';
@@ -296,6 +296,7 @@ export default function App() {
 function Login({ onLogin }: { onLogin: (user: User) => void }) {
   const [creatingAccount, setCreatingAccount] = useState(false);
   const [recoveringPassword, setRecoveringPassword] = useState(false);
+  const [verificationEmail, setVerificationEmail] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [passwordVisible, setPasswordVisible] = useState(false);
@@ -323,7 +324,13 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
   const submit = async () => {
     setLoading(true);
     try { onLogin(await api.login(email.trim(), password)); }
-    catch (error) { showError(error); }
+    catch (error) {
+      if (error instanceof ApiError && error.code === 'EMAIL_NOT_VERIFIED') {
+        const pendingEmail = email.trim().toLowerCase();
+        setVerificationEmail(pendingEmail);
+        try { const result = await api.resendEmailVerification(pendingEmail); showSuccess(result.message); } catch (resendError) { showError(resendError); }
+      } else showError(error);
+    }
     finally { setLoading(false); }
   };
   const loginWithGoogle = async () => {
@@ -341,7 +348,8 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
       setGoogleLoading(false);
     }
   };
-  if (creatingAccount) return <Register onRegistered={onLogin} onBack={() => setCreatingAccount(false)}/>;
+  if (verificationEmail) return <EmailVerification email={verificationEmail} onVerified={onLogin} onBack={() => setVerificationEmail('')}/>;
+  if (creatingAccount) return <Register onRegistered={onLogin} onVerificationRequired={(pendingEmail) => { setCreatingAccount(false); setVerificationEmail(pendingEmail); }} onBack={() => setCreatingAccount(false)}/>;
   if (recoveringPassword) return <PasswordRecovery onBack={() => setRecoveringPassword(false)}/>;
   return <SafeAreaView style={styles.loginPage} edges={['top','right','bottom','left']}>
     <ExpoStatusBar style="light" translucent backgroundColor="transparent" />
@@ -374,6 +382,19 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
   </SafeAreaView>;
 }
 
+function EmailVerification({ email, onVerified, onBack }: { email:string; onVerified:(user:User)=>void; onBack:()=>void }) {
+  const [code,setCode]=useState('');
+  const [loading,setLoading]=useState(false);
+  const [resending,setResending]=useState(false);
+  useEffect(()=>{if(Platform.OS!=='android')return;const subscription=BackHandler.addEventListener('hardwareBackPress',()=>{Keyboard.dismiss();onBack();return true;});return()=>subscription.remove();},[onBack]);
+  const verify=async()=>{setLoading(true);try{onVerified(await api.verifyEmail(email,code));showSuccess('Correo verificado. Tu cuenta está lista.');}catch(error){showError(error);}finally{setLoading(false);}};
+  const resend=async()=>{setResending(true);try{const result=await api.resendEmailVerification(email);showSuccess(result.message);}catch(error){showError(error);}finally{setResending(false);}};
+  return <SafeAreaView style={styles.loginPage} edges={['top','right','bottom','left']}><ExpoStatusBar style="light" translucent backgroundColor="transparent"/><KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':'height'} style={styles.loginKeyboardAvoiding}><ScrollView contentContainerStyle={styles.registerScroll} keyboardShouldPersistTaps="handled" keyboardDismissMode={Platform.OS==='ios'?'interactive':'on-drag'} showsVerticalScrollIndicator={false}>
+    <Pressable accessibilityRole="button" accessibilityLabel="Volver al inicio de sesión" onPress={onBack} style={styles.authBack}><Ionicons name="arrow-back" size={20} color={palette.white}/><Text style={styles.authBackText}>Volver</Text></Pressable><Text style={styles.loginBrand}>GymFlow <Text style={styles.mini}>MINI</Text></Text><Text style={styles.registerTitle}>Verifica tu correo</Text><Text style={styles.loginCopy}>Escribe el código de 6 dígitos enviado a {email}.</Text>
+    <View style={styles.loginCard}><View style={styles.verificationIcon}><Ionicons name="mail-outline" size={26} color={palette.action}/></View><Field label="Código de verificación" value={code} onChangeText={value=>setCode(value.replace(/\D/g,'').slice(0,6))} keyboardType="number-pad" maxLength={6} returnKeyType="done" onSubmitEditing={()=>void verify()}/><Text style={styles.registrationNote}>El código vence en 15 minutos y admite hasta cinco intentos.</Text><PrimaryButton label={loading?'Verificando…':'Verificar correo'} onPress={verify} disabled={loading||resending||code.length!==6}/><Pressable accessibilityRole="button" disabled={loading||resending} onPress={()=>void resend()} style={styles.resendCodeButton}><Text style={styles.forgotPasswordText}>{resending?'Enviando…':'Reenviar código'}</Text></Pressable></View>
+  </ScrollView></KeyboardAvoidingView></SafeAreaView>;
+}
+
 function PasswordRecovery({ onBack }: { onBack: () => void }) {
   const [email,setEmail]=useState(''); const [code,setCode]=useState(''); const [password,setPassword]=useState(''); const [confirmation,setConfirmation]=useState(''); const [codeSent,setCodeSent]=useState(false); const [loading,setLoading]=useState(false);
   const scrollRef=useRef<ScrollView>(null); const recoveryCardY=useRef(0); const activeRecoveryTarget=useRef<number|null>(null); const revealFocusedInput=useRevealFocusedInput(scrollRef,28);
@@ -400,7 +421,7 @@ function PasswordRecovery({ onBack }: { onBack: () => void }) {
   </KeyboardScrollContext.Provider></ScrollView></KeyboardAvoidingView></SafeAreaView>;
 }
 
-function Register({ onRegistered, onBack }: { onRegistered: (user: User) => void; onBack: () => void }) {
+function Register({ onRegistered, onVerificationRequired, onBack }: { onRegistered: (user: User) => void; onVerificationRequired:(email:string)=>void; onBack: () => void }) {
   const [ownerName,setOwnerName]=useState(''); const [gymName,setGymName]=useState(''); const [province,setProvince]=useState('');
   const [phone,setPhone]=useState(''); const [email,setEmail]=useState(''); const [password,setPassword]=useState(''); const [confirmation,setConfirmation]=useState(''); const [loading,setLoading]=useState(false);
   const [page,setPage]=useState(0); const keyboardOpen=useKeyboardOpen();
@@ -410,7 +431,7 @@ function Register({ onRegistered, onBack }: { onRegistered: (user: User) => void
   const submit=async()=>{
     if(password!==confirmation){showError(new Error('Las contraseñas no coinciden'));return;}
     setLoading(true);
-    try{onRegistered(await api.register({ownerName:ownerName.trim(),gymName:gymName.trim(),province:province.trim()||undefined,phone:phone.trim(),email:email.trim(),password}));showSuccess('Cuenta creada. Ahora elige cómo comenzar.');}
+    try{const result=await api.register({ownerName:ownerName.trim(),gymName:gymName.trim(),province:province.trim()||undefined,phone:phone.trim(),email:email.trim(),password});if(result.verificationRequired){showSuccess(result.message);onVerificationRequired(result.email);}else{onRegistered(result.user);showSuccess('Cuenta creada. Ahora elige cómo comenzar.');}}
     catch(error){showError(error);}finally{setLoading(false);}
   };
   const goBack=()=>{Keyboard.dismiss();if(page>0)setPage(value=>value-1);else onBack();};
@@ -1155,7 +1176,7 @@ const baseStyles = StyleSheet.create(withReadableType({
   center:{flex:1,alignItems:'center',justifyContent:'center',backgroundColor:palette.brand},app:{flex:1,backgroundColor:palette.background},content:{flex:1},minTouch:{minHeight:44},
   errorToastLayer:{...StyleSheet.absoluteFillObject,zIndex:1000,elevation:30},errorToast:{position:'absolute',top:Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) + 10 : 54,left:14,right:14,minHeight:72,padding:13,flexDirection:'row',alignItems:'flex-start',gap:10,borderWidth:1,borderColor:'#f8b4ad',borderRadius:15,backgroundColor:'#b42318',shadowColor:'#7a1710',shadowOffset:{width:0,height:6},shadowOpacity:.3,shadowRadius:12,elevation:24},successToast:{borderColor:'#7cc89f',backgroundColor:'#167247',shadowColor:'#0b4a2d'},warningToast:{borderColor:'#f3c26b',backgroundColor:'#a86108',shadowColor:'#6f3c03'},errorToastBody:{flex:1},errorToastTitle:{color:'#fff',fontSize:13,fontWeight:'900'},errorToastMessage:{marginTop:3,color:'#fff',fontSize:12,lineHeight:17,fontWeight:'600'},errorToastClose:{width:44,height:44,marginTop:-7,marginRight:-7,alignItems:'center',justifyContent:'center',borderRadius:12,backgroundColor:'#ffffff1f'},
   loginPage:{flex:1,backgroundColor:palette.brand,paddingHorizontal:24,paddingTop:36},loginKeyboardAvoiding:{flex:1},loginScroll:{flexGrow:1},loginBrand:{marginTop:8,color:palette.white,fontSize:22,fontWeight:'800'},mini:{color:palette.accent,fontSize:11,letterSpacing:2},loginTitle:{marginTop:44,color:palette.white,fontSize:34,fontWeight:'800',letterSpacing:-1.2},loginCopy:{marginTop:10,color:'#c4d5cd',fontSize:15,lineHeight:22},loginCard:{marginTop:34,padding:20,borderRadius:20,backgroundColor:palette.white},loginDivider:{marginVertical:16,flexDirection:'row',alignItems:'center',gap:10},loginDividerLine:{height:1,flex:1,backgroundColor:'#dce4df'},loginDividerText:{color:palette.secondary,fontSize:12,fontWeight:'700'},googleLoginButton:{minHeight:48,borderWidth:1,borderColor:'#cfd9d3',borderRadius:12,backgroundColor:palette.white,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:10},googleLoginText:{color:palette.brand,fontSize:13,fontWeight:'800'},loginJoin:{marginTop:20,alignItems:'center',gap:4},loginJoinText:{color:'#c4d5cd',fontSize:13},loginJoinLink:{color:palette.accent,fontSize:13,fontWeight:'800',textDecorationLine:'underline'},version:{marginTop:'auto',marginBottom:24,textAlign:'center',color:'#a9c3b7',fontSize:10,letterSpacing:2},
-  registerScroll:{flexGrow:1,paddingBottom:28},authBack:{minHeight:44,marginLeft:-8,flexDirection:'row',alignItems:'center',gap:7,alignSelf:'flex-start',paddingHorizontal:8},authBackText:{color:palette.white,fontSize:13,fontWeight:'800'},registerTitle:{marginTop:24,color:palette.white,fontSize:31,fontWeight:'800',letterSpacing:-1},registrationNote:{marginTop:2,marginBottom:4,color:palette.secondary,fontSize:11,lineHeight:16,fontWeight:'600'},forgotPasswordButton:{minHeight:36,alignSelf:'flex-end',justifyContent:'center'},forgotPasswordText:{color:palette.action,fontSize:11,fontWeight:'900'},resendCodeButton:{minHeight:42,alignItems:'center',justifyContent:'center'},
+  registerScroll:{flexGrow:1,paddingBottom:28},authBack:{minHeight:44,marginLeft:-8,flexDirection:'row',alignItems:'center',gap:7,alignSelf:'flex-start',paddingHorizontal:8},authBackText:{color:palette.white,fontSize:13,fontWeight:'800'},registerTitle:{marginTop:24,color:palette.white,fontSize:31,fontWeight:'800',letterSpacing:-1},verificationIcon:{width:52,height:52,marginBottom:16,alignItems:'center',justifyContent:'center',borderRadius:17,backgroundColor:'#e8f5ce'},registrationNote:{marginTop:2,marginBottom:4,color:palette.secondary,fontSize:11,lineHeight:16,fontWeight:'600'},forgotPasswordButton:{minHeight:36,alignSelf:'flex-end',justifyContent:'center'},forgotPasswordText:{color:palette.action,fontSize:11,fontWeight:'900'},resendCodeButton:{minHeight:42,alignItems:'center',justifyContent:'center'},
   offerPage:{flex:1,backgroundColor:palette.background},offerScroll:{flexGrow:1,paddingHorizontal:22,paddingTop:28,paddingBottom:24},offerBrand:{color:palette.brand,fontSize:22,fontWeight:'900'},offerMini:{color:palette.action,fontSize:11,letterSpacing:2},offerEyebrow:{marginTop:38,color:palette.action,fontSize:10,fontWeight:'900',letterSpacing:1.25},offerTitle:{marginTop:8,color:palette.ink,fontSize:30,lineHeight:35,fontWeight:'900',letterSpacing:-1},offerCopy:{marginTop:10,color:palette.secondary,fontSize:14,lineHeight:21},offerList:{marginTop:26,gap:12},offerCard:{minHeight:94,padding:14,flexDirection:'row',alignItems:'center',gap:12,borderWidth:1,borderColor:palette.line,borderRadius:18,backgroundColor:palette.white},offerCardFeatured:{borderColor:'#83b79d',backgroundColor:'#f2faf5'},offerCardDisabled:{opacity:.65},offerIcon:{width:45,height:45,borderRadius:14,alignItems:'center',justifyContent:'center',backgroundColor:'#e5f2e9'},offerIconFeatured:{backgroundColor:palette.action},offerCardTitle:{color:palette.ink,fontSize:15,fontWeight:'900'},offerCardDetail:{marginTop:5,color:palette.secondary,fontSize:10,fontWeight:'700'},offerPriceWrap:{alignItems:'flex-end',gap:8},offerPrice:{color:palette.action,fontSize:12,fontWeight:'900'},trialProtection:{marginTop:18,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:6},trialProtectionText:{flex:1,color:palette.secondary,fontSize:10,lineHeight:15,fontWeight:'700'},offerLogout:{minHeight:44,marginTop:'auto',alignItems:'center',justifyContent:'center'},offerLogoutText:{color:palette.secondary,fontSize:12,fontWeight:'800'},pendingCard:{marginTop:28,padding:22,borderWidth:1,borderColor:'#ead7bd',borderRadius:22,backgroundColor:palette.white},pendingIcon:{width:54,height:54,borderRadius:18,alignItems:'center',justifyContent:'center',backgroundColor:'#fff1df'},pendingTitle:{marginTop:8,color:palette.ink,fontSize:25,fontWeight:'900'},pendingCopy:{marginTop:10,color:palette.secondary,fontSize:13,lineHeight:20},requestCode:{marginTop:22,padding:15,alignItems:'center',gap:6,borderRadius:14,backgroundColor:'#f2f5f3'},requestCodeLabel:{color:palette.secondary,fontSize:9,fontWeight:'900',letterSpacing:1},requestCodeValue:{color:palette.action,fontSize:24,fontWeight:'900',letterSpacing:1.5},pendingPlan:{marginTop:12,paddingVertical:12,flexDirection:'row',justifyContent:'space-between',gap:12,borderBottomWidth:1,borderBottomColor:palette.line},pendingPlanLabel:{color:palette.secondary,fontSize:11,fontWeight:'700'},pendingPlanValue:{color:palette.ink,fontSize:11,fontWeight:'900'},pendingActions:{marginTop:20,gap:12},offerWhatsapp:{height:49,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:8,borderRadius:13,backgroundColor:'#1fa855'},offerWhatsappText:{color:palette.white,fontSize:12,fontWeight:'900'},changePlanButton:{minHeight:44,marginTop:4,alignItems:'center',justifyContent:'center'},changePlanText:{color:palette.action,fontSize:11,fontWeight:'900'},
   topbar:{paddingTop:18,paddingHorizontal:20,paddingBottom:14,flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:12,backgroundColor:palette.background},topbarBack:{width:44,height:44,alignItems:'center',justifyContent:'center',borderRadius:13,backgroundColor:palette.white},topbarTitle:{flex:1,minWidth:0},kicker:{color:palette.action,fontSize:11,fontWeight:'800',letterSpacing:1.2},screenTitle:{marginTop:3,fontSize:27,fontWeight:'800',color:palette.ink,letterSpacing:-.8},avatar:{width:44,height:44,borderWidth:1,borderColor:palette.line,borderRadius:22,alignItems:'center',justifyContent:'center',backgroundColor:palette.white},avatarActive:{borderColor:palette.accent,backgroundColor:palette.accent},
   syncBar:{minHeight:44,marginHorizontal:16,marginBottom:4,paddingHorizontal:12,flexDirection:'row',alignItems:'center',gap:9,borderRadius:12,backgroundColor:'#e8f5ce'},syncOffline:{backgroundColor:'#fff4e8'},syncError:{backgroundColor:'#fee9e5'},syncDot:{width:9,height:9,borderRadius:5,backgroundColor:palette.warning},syncDotOk:{backgroundColor:palette.action},syncMain:{flex:1},syncTitle:{color:palette.ink,fontSize:11,fontWeight:'800'},syncDetail:{marginTop:1,color:palette.secondary,fontSize:9},syncAction:{color:palette.action,fontSize:10,fontWeight:'800'},
@@ -1207,6 +1228,7 @@ const darkStyles = StyleSheet.create({
   app:{backgroundColor:darkPalette.background},
   content:{backgroundColor:darkPalette.background},
   loginCard:{backgroundColor:darkPalette.surface},
+  verificationIcon:{backgroundColor:darkPalette.actionSoft},
   googleLoginButton:{backgroundColor:darkPalette.surface,borderColor:darkPalette.border},googleLoginText:{color:darkPalette.text},loginDividerLine:{backgroundColor:darkPalette.border},
   topbar:{backgroundColor:darkPalette.background},
   screenTitle:{color:darkPalette.text},

@@ -1,19 +1,103 @@
-import { BadRequestException, ConflictException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { GymSubscriptionPlan, Prisma, UserRole } from '@prisma/client';
+import * as argon2 from 'argon2';
+import { createHmac } from 'crypto';
 import { AuthService } from './auth.service';
 
 describe('AuthService self-service security', () => {
   const authUser = { id:'user-1', email:'owner@gym.cu', role:UserRole.ADMIN, gymId:'gym-1' };
 
+  it('crea la cuenta pendiente y envía solamente el código cuando producción exige verificar el correo', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    const createVerification = jest.fn().mockImplementation(({data})=>({id:'verification-1',...data}));
+    const createUser = jest.fn().mockResolvedValue({id:'user-1',email:'owner@gmail.com',name:'Ana',gymId:'gym-1'});
+    const sendEmailVerificationCode = jest.fn().mockResolvedValue(undefined);
+    const prisma = {
+      emailVerificationCode:{findFirst:jest.fn().mockResolvedValue(null),update:jest.fn()},
+      $transaction:jest.fn(async(callback:(tx:unknown)=>unknown)=>callback({
+        gym:{create:jest.fn().mockResolvedValue({id:'gym-1'})},
+        user:{create:createUser},
+        emailVerificationCode:{updateMany:jest.fn(),create:createVerification},
+      })),
+    };
+    const service = new AuthService(prisma as never,{signAsync:jest.fn()} as never,{sendEmailVerificationCode} as never);
+    try {
+      await expect(service.register({ownerName:'Ana',gymName:'Gym Ana',phone:'51234567',email:'OWNER@gmail.com',password:'ClaveSegura123',deviceId:'android:1234567890'})).resolves.toMatchObject({verificationRequired:true,email:'owner@gmail.com'});
+      expect(createUser).toHaveBeenCalledWith({data:expect.objectContaining({email:'owner@gmail.com',emailVerifiedAt:null})});
+      const sentCode = sendEmailVerificationCode.mock.calls[0][0].code as string;
+      expect(sentCode).toMatch(/^\d{6}$/);
+      expect(createVerification).toHaveBeenCalledWith({data:expect.objectContaining({codeHash:expect.stringMatching(/^[a-f0-9]{64}$/)})});
+      expect(createVerification.mock.calls[0][0].data.codeHash).not.toBe(sentCode);
+    } finally {
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = previousNodeEnv;
+    }
+  });
+
+  it('mantiene el autorregistro directo en desarrollo cuando la verificación está desactivada', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    const previousVerification = process.env.EMAIL_VERIFICATION_REQUIRED;
+    process.env.NODE_ENV = 'development';
+    delete process.env.EMAIL_VERIFICATION_REQUIRED;
+    const createUser = jest.fn().mockResolvedValue({id:'user-1',email:'owner@gmail.com',name:'Ana',gymId:'gym-1'});
+    const sendEmailVerificationCode = jest.fn();
+    const prisma = {$transaction:jest.fn(async(callback:(tx:unknown)=>unknown)=>callback({gym:{create:jest.fn().mockResolvedValue({id:'gym-1'})},user:{create:createUser}}))};
+    const service = new AuthService(prisma as never,{signAsync:jest.fn()} as never,{sendEmailVerificationCode} as never);
+    jest.spyOn(service as never,'session').mockResolvedValue({accessToken:'jwt',user:{id:'user-1'}} as never);
+    try {
+      await expect(service.register({ownerName:'Ana',gymName:'Gym Ana',phone:'51234567',email:'owner@gmail.com',password:'ClaveSegura123',deviceId:'android:1234567890'})).resolves.toMatchObject({accessToken:'jwt'});
+      expect(createUser).toHaveBeenCalledWith({data:expect.objectContaining({emailVerifiedAt:expect.any(Date)})});
+      expect(sendEmailVerificationCode).not.toHaveBeenCalled();
+    } finally {
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = previousNodeEnv;
+      if (previousVerification === undefined) delete process.env.EMAIL_VERIFICATION_REQUIRED; else process.env.EMAIL_VERIFICATION_REQUIRED = previousVerification;
+    }
+  });
+
+  it('bloquea el login por contraseña de una cuenta que aún no verificó su correo', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    const passwordHash = await argon2.hash('ClaveSegura123');
+    const prisma = {user:{findUnique:jest.fn().mockResolvedValue({id:'user-1',email:'owner@gmail.com',passwordHash,isActive:true,emailVerifiedAt:null,role:UserRole.ADMIN,gym:{isActive:true}})}};
+    const service = new AuthService(prisma as never,{signAsync:jest.fn()} as never,{} as never);
+    try {
+      await expect(service.login({email:'owner@gmail.com',password:'ClaveSegura123'})).rejects.toEqual(
+        new ForbiddenException({code:'EMAIL_NOT_VERIFIED',message:'Debes verificar tu correo antes de iniciar sesión'}),
+      );
+    } finally {
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = previousNodeEnv;
+    }
+  });
+
+  it('activa la cuenta con un código válido de un solo uso y crea la sesión', async () => {
+    const code = '123456';
+    const codeHash = createHmac('sha256',process.env.JWT_SECRET??'local').update(`verify-email:user-1:${code}`).digest('hex');
+    const updateUser = jest.fn();
+    const consumeCodes = jest.fn();
+    const prisma = {
+      user:{findUnique:jest.fn().mockResolvedValue({id:'user-1',isActive:true,emailVerifiedAt:null})},
+      emailVerificationCode:{findFirst:jest.fn().mockResolvedValue({id:'verification-1',codeHash,expiresAt:new Date(Date.now()+60_000),attempts:0}),update:jest.fn()},
+      $transaction:jest.fn(async(callback:(tx:unknown)=>unknown)=>callback({user:{update:updateUser},emailVerificationCode:{updateMany:consumeCodes}})),
+    };
+    const service = new AuthService(prisma as never,{signAsync:jest.fn()} as never,{} as never);
+    jest.spyOn(service as never,'session').mockResolvedValue({accessToken:'jwt',user:{id:'user-1'}} as never);
+
+    await expect(service.verifyEmail({email:'owner@gmail.com',code})).resolves.toMatchObject({accessToken:'jwt'});
+    expect(updateUser).toHaveBeenCalledWith({where:{id:'user-1'},data:{emailVerifiedAt:expect.any(Date)}});
+    expect(consumeCodes).toHaveBeenCalledWith({where:{userId:'user-1',usedAt:null},data:{usedAt:expect.any(Date)}});
+  });
+
   it('inicia sesión con Google solamente si el administrador ya existe', async () => {
-    const existing = { id:'user-1',email:'owner@gmail.com',isActive:true,role:UserRole.ADMIN,gym:{isActive:true} };
-    const prisma = { user:{findUnique:jest.fn().mockResolvedValue(existing)} };
+    const existing = { id:'user-1',email:'owner@gmail.com',emailVerifiedAt:null,isActive:true,role:UserRole.ADMIN,gym:{isActive:true} };
+    const update = jest.fn().mockResolvedValue({...existing,emailVerifiedAt:new Date()});
+    const prisma = { user:{findUnique:jest.fn().mockResolvedValue(existing),update} };
     const googleIdentity = { verifiedEmail:jest.fn().mockResolvedValue('owner@gmail.com') };
     const service = new AuthService(prisma as never,{signAsync:jest.fn()} as never,{sendPasswordResetCode:jest.fn()} as never,googleIdentity as never);
     jest.spyOn(service as never,'session').mockResolvedValue({accessToken:'jwt',user:existing} as never);
 
     await expect(service.googleLogin({idToken:'token-valido'.repeat(12)})).resolves.toMatchObject({accessToken:'jwt'});
     expect(prisma.user.findUnique).toHaveBeenCalledWith({where:{email:'owner@gmail.com'},include:{gym:true}});
+    expect(update).toHaveBeenCalledWith({where:{id:'user-1'},data:{emailVerifiedAt:expect.any(Date)}});
   });
 
   it('no crea una cuenta cuando el correo autenticado con Google no existe', async () => {

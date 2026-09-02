@@ -20,6 +20,15 @@ export class RegisterDto {
   @IsString() @MinLength(12) @MaxLength(200) deviceId: string;
 }
 
+export class VerifyEmailDto {
+  @IsEmail() email: string;
+  @IsString() @Matches(/^\d{6}$/, { message: 'El código debe contener 6 dígitos' }) code: string;
+}
+
+export class ResendEmailVerificationDto {
+  @IsEmail() email: string;
+}
+
 export class SelectSubscriptionDto {
   @IsEnum(GymSubscriptionPlan) plan: GymSubscriptionPlan;
   @IsString() @MinLength(12) @MaxLength(200) deviceId: string;

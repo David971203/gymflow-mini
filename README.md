@@ -21,6 +21,7 @@ Panel web publicado en Vercel: <https://superadmin-web-eight.vercel.app>
 Incluye:
 
 - Autorregistro del dueño desde Android con creación de su gimnasio y cuenta administrativa.
+- Verificación obligatoria del correo en producción mediante código de 6 dígitos; desarrollo puede omitirla mediante configuración del backend.
 - Prueba gratuita automática de 7 días, única por teléfono móvil y dispositivo Android.
 - Solicitudes de planes mensual y anual con código P2P, contacto por WhatsApp y aprobación desde el panel.
 - Recuperación de contraseña mediante código de 6 dígitos enviado por Gmail y cambio seguro desde Cuenta.

@@ -120,23 +120,39 @@ model PlatformSubscription {
 }
 
 model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
-  passwordHash String
-  name         String
-  phone        String?
-  tokenVersion Int      @default(0)
-  role         UserRole
-  gymId        String?
-  gym          Gym?     @relation(fields: [gymId], references: [id])
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
+  id              String    @id @default(uuid())
+  email           String    @unique
+  passwordHash    String
+  name            String
+  phone           String?
+  tokenVersion    Int       @default(0)
+  role            UserRole
+  gymId           String?
+  gym             Gym?      @relation(fields: [gymId], references: [id])
+  isActive        Boolean   @default(true)
+  emailVerifiedAt DateTime?
+  createdAt       DateTime  @default(now())
 
-  movements          PaymentMovement[]
-  syncReceipts       SyncReceipt[]
-  passwordResetCodes PasswordResetCode[]
+  movements              PaymentMovement[]
+  syncReceipts           SyncReceipt[]
+  passwordResetCodes     PasswordResetCode[]
+  emailVerificationCodes EmailVerificationCode[]
 
   @@index([gymId])
+}
+
+model EmailVerificationCode {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash  String
+  expiresAt DateTime
+  attempts  Int       @default(0)
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
 }
 
 model PasswordResetCode {

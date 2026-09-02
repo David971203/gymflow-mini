@@ -5,7 +5,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import type { NotificationResponse } from 'expo-notifications';
 import * as SecureStore from 'expo-secure-store';
-import { Directory, File } from 'expo-file-system';
+import { Directory, File, Paths } from 'expo-file-system';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -1058,11 +1058,20 @@ function SectionTitle({ title, subtitle }: { title: string; subtitle: string }) 
 function Row({ title, subtitle, value }: { title: string; subtitle: string; value: string }) { return <View style={styles.paymentRow}><View style={styles.rowMain}><Text numberOfLines={1} ellipsizeMode="tail" maxFontSizeMultiplier={1.35} style={styles.rowTitle}>{title}</Text><Text maxFontSizeMultiplier={1.3} style={styles.rowSubtitle}>{subtitle}</Text></View><Text numberOfLines={1} adjustsFontSizeToFit maxFontSizeMultiplier={1.25} style={styles.income}>{value}</Text></View>; }
 function Empty({ text }: { text: string }) { return <Text style={styles.empty}>{text}</Text>; }
 function MemberPhotoAvatar({ member, profile = false, editor = false }: { member: Member; profile?: boolean; editor?: boolean }) {
-  const [source, setSource] = useState<Awaited<ReturnType<typeof api.memberPhotoSource>> | null>(null);
+  const [source, setSource] = useState<{ uri: string } | null>(null);
   useEffect(() => {
     let active = true;
     if (!member.photoUpdatedAt) { setSource(null); return () => { active = false; }; }
-    void api.memberPhotoSource(member).then((next) => { if (active) setSource(next); }).catch(() => { if (active) setSource(null); });
+    void (async () => {
+      const request = await api.memberPhotoSource(member);
+      const directory = new Directory(Paths.cache, 'member-photos');
+      if (!directory.exists) directory.create({ idempotent:true, intermediates:true });
+      const safeId = member.id.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const version = new Date(member.photoUpdatedAt as string).getTime();
+      const file = new File(directory, `${safeId}-${version}.jpg`);
+      if (!file.exists) await File.downloadFileAsync(request.uri, file, { headers:request.headers, idempotent:true });
+      if (active) setSource({ uri:file.uri });
+    })().catch(() => { if (active) setSource(null); });
     return () => { active = false; };
   }, [member.id, member.photoUpdatedAt]);
   const containerStyle = editor ? styles.memberPhotoEditorAvatar : profile ? styles.memberProfileAvatar : styles.memberAvatar;

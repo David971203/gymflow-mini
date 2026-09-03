@@ -152,4 +152,24 @@ describe('SyncService', () => {
     expect(response.results[0].status).toBe('APPLIED');
     expect(mini.deletePlan).toHaveBeenCalledWith(deleteOperation.entityId, user);
   });
+
+  it('rechaza operaciones administrativas enviadas por una recepcionista', async () => {
+    const receptionist = { ...user, role:'RECEPTIONIST' as const };
+    const deleteOperation = {
+      id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      type:'PLAN_DELETE' as const,
+      entityId:'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      occurredAt:operation.occurredAt,
+      payload:{},
+    };
+    const prisma = { syncReceipt:{
+      findUnique:jest.fn().mockResolvedValue(null),
+      upsert:jest.fn().mockImplementation(({ create }) => ({ ...create, result:create.result ?? null, message:create.message ?? null })),
+    } };
+    const mini = { deletePlan:jest.fn() };
+    const service = new SyncService(prisma as never, mini as never, {} as never);
+    const response = await service.push({ operations:[deleteOperation] }, receptionist);
+    expect(response.results[0]).toMatchObject({ status:'REJECTED', message:'Tu rol no permite realizar esta operación' });
+    expect(mini.deletePlan).not.toHaveBeenCalled();
+  });
 });

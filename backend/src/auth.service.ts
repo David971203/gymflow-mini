@@ -91,10 +91,10 @@ export class AuthService {
     if (!user || !user.isActive || !(await argon2.verify(user.passwordHash, dto.password))) {
       throw new UnauthorizedException('Credenciales incorrectas');
     }
-    if (user.role === 'ADMIN' && (!user.gym || !user.gym.isActive)) {
+    if (user.role !== UserRole.SUPER_ADMIN && (!user.gym || !user.gym.isActive)) {
       throw new UnauthorizedException('El gimnasio está inactivo');
     }
-    if (user.role === UserRole.ADMIN && this.emailVerificationRequired() && user.emailVerifiedAt === null) {
+    if (user.role !== UserRole.SUPER_ADMIN && this.emailVerificationRequired() && user.emailVerifiedAt === null) {
       throw new ForbiddenException({ code:'EMAIL_NOT_VERIFIED', message:'Debes verificar tu correo antes de iniciar sesión' });
     }
     return this.session(user.id);
@@ -105,7 +105,7 @@ export class AuthService {
     const email = await this.googleIdentity.verifiedEmail(dto.idToken);
     const user = await this.prisma.user.findUnique({ where: { email }, include: { gym: true } });
     if (!user) throw new UnauthorizedException('No existe una cuenta de GymFlow con este correo. Crea tu cuenta primero');
-    if (!user.isActive || user.role !== UserRole.ADMIN) throw new UnauthorizedException('Esta cuenta no puede acceder a la aplicación de administradores');
+    if (!user.isActive || (user.role !== UserRole.ADMIN && user.role !== UserRole.RECEPTIONIST)) throw new UnauthorizedException('Esta cuenta no puede acceder a la aplicación del gimnasio');
     if (!user.gym || !user.gym.isActive) throw new UnauthorizedException('El gimnasio está inactivo');
     if (user.emailVerifiedAt === null) await this.prisma.user.update({ where:{ id:user.id }, data:{ emailVerifiedAt:new Date() } });
     return this.session(user.id);

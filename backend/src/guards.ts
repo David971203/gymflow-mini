@@ -32,7 +32,7 @@ export class GymSubscriptionGuard implements CanActivate {
   async canActivate(context: ExecutionContext) {
     if (this.reflector.getAllAndOverride<boolean>(ALLOW_WITHOUT_SUBSCRIPTION, [context.getHandler(), context.getClass()])) return true;
     const request = context.switchToHttp().getRequest<{ method: string; user?: AuthUser }>();
-    if (!request.user || request.user.role !== UserRole.ADMIN) return true;
+    if (!request.user || request.user.role === UserRole.SUPER_ADMIN) return true;
     if (!request.user.gymId) throw new ForbiddenException('Para continuar debes renovar la membresía de tu gimnasio.');
     const gym = await this.prisma.gym.findUnique({ where: { id: request.user.gymId }, select: { isActive: true, subscriptionPlan: true, subscriptionEndsAt: true } });
     if (gym?.subscriptionPlan === null) throw new ForbiddenException('Elige una prueba o solicita un plan para acceder a GymFlow Mini.');

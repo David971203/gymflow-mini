@@ -17,7 +17,7 @@ export class AuthController {
   @Public() @Post('password/forgot') forgotPassword(@Body() dto: ForgotPasswordDto) { return this.auth.forgotPassword(dto); }
   @Public() @Post('password/reset') resetPassword(@Body() dto: ResetPasswordDto) { return this.auth.resetPassword(dto); }
   @Get('me') @AllowWithoutSubscription() me(@CurrentUser() user: AuthUser) { return this.auth.me(user); }
-  @Post('password/change') @Roles(UserRole.ADMIN) @AllowWithoutSubscription()
+  @Post('password/change') @Roles(UserRole.ADMIN, UserRole.RECEPTIONIST) @AllowWithoutSubscription()
   changePassword(@CurrentUser() user: AuthUser, @Body() dto: ChangePasswordDto) { return this.auth.changePassword(user, dto); }
   @Post('subscription') @Roles(UserRole.ADMIN) @AllowWithoutSubscription()
   selectSubscription(@CurrentUser() user: AuthUser, @Body() dto: SelectSubscriptionDto) { return this.auth.selectSubscription(user, dto); }

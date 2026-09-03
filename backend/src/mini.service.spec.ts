@@ -111,6 +111,30 @@ describe('MiniService', () => {
     await expect(service.updateGymAdmin('gym-1', 'admin-other', { name: 'Otro' })).rejects.toBeInstanceOf(NotFoundException);
   });
 
+  it('lista solamente las cuentas de personal del gimnasio autenticado', async () => {
+    const findMany = jest.fn().mockResolvedValue([]);
+    const service = new MiniService({ user:{ findMany } } as never);
+    await service.listStaff(user);
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where:{ gymId:'gym-1', role:{ in:['ADMIN','RECEPTIONIST'] } },
+    }));
+  });
+
+  it('impide modificar administradores desde la gestión de personal del gimnasio', async () => {
+    const prisma = { user:{ findFirst:jest.fn().mockResolvedValue(null) } };
+    const service = new MiniService(prisma as never);
+    await expect(service.updateStaff('admin-2', { name:'Otro administrador' }, user)).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.user.findFirst).toHaveBeenCalledWith({ where:{ id:'admin-2', gymId:'gym-1', role:'RECEPTIONIST' } });
+  });
+
+  it('crea solamente cuentas de recepcionista desde la aplicación del gimnasio', async () => {
+    const create = jest.fn().mockImplementation(({ data }) => ({ id:'reception-1', ...data }));
+    const prisma = { user:{ create } };
+    const service = new MiniService(prisma as never);
+    await service.createStaff({ name:'Laura', email:'LAURA@GYM.CU', password:'Recepcion123!' }, user);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ data:expect.objectContaining({ gymId:'gym-1', role:'RECEPTIONIST', name:'Laura', email:'laura@gym.cu' }) }));
+  });
+
   it('lista únicamente los planes del gimnasio seleccionado por plataforma', async () => {
     const findMany = jest.fn().mockResolvedValue([]);
     const prisma = { gym: { findUnique: jest.fn().mockResolvedValue({ id: 'gym-1' }) }, plan: { findMany } };

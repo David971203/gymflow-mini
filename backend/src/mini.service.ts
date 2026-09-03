@@ -3,7 +3,7 @@ import { GymSubscriptionPlan, MembershipStatus, PaymentStatus, Prisma, Subscript
 import * as argon2 from 'argon2';
 import { PrismaService } from './prisma.service';
 import type { AuthUser } from './common';
-import { ApplyPaymentDto, AssignGymMembershipDto, CreateGymAdminDto, CreateGymDto, CreateMemberDto, CreateMembershipDto, CreatePlanDto, RenewMembershipDto, UpdateGymAdminDto, UpdateGymDto, UpdateGymMembershipDto, UpdateMemberDto, UpdatePlanDto } from './mini.dto';
+import { ApplyPaymentDto, AssignGymMembershipDto, CreateGymAdminDto, CreateGymDto, CreateMemberDto, CreateMembershipDto, CreatePlanDto, CreateStaffAccountDto, RenewMembershipDto, UpdateGymAdminDto, UpdateGymDto, UpdateGymMembershipDto, UpdateMemberDto, UpdatePlanDto, UpdateStaffAccountDto } from './mini.dto';
 
 const membershipInclude = {
   member: { select: { id: true, gymId: true, ci: true, firstName: true, lastName: true, phone: true } },
@@ -22,7 +22,7 @@ export class MiniService {
   constructor(private readonly prisma: PrismaService) {}
 
   private gymId(user: AuthUser): string {
-    if (user.role !== UserRole.ADMIN || !user.gymId) throw new BadRequestException('Se requiere un administrador de gimnasio');
+    if ((user.role !== UserRole.ADMIN && user.role !== UserRole.RECEPTIONIST) || !user.gymId) throw new BadRequestException('Se requiere una cuenta del gimnasio');
     return user.gymId;
   }
 
@@ -186,6 +186,74 @@ export class MiniService {
     }
     await this.prisma.user.delete({ where: { id } });
     return { id, disposition: 'DELETED' };
+  }
+
+  async listStaff(user: AuthUser) {
+    const gymId = this.gymId(user);
+    return this.prisma.user.findMany({
+      where: { gymId, role: { in: [UserRole.ADMIN, UserRole.RECEPTIONIST] } },
+      select: { id: true, email: true, name: true, role: true, isActive: true, createdAt: true },
+      orderBy: [{ isActive: 'desc' }, { role: 'asc' }, { name: 'asc' }],
+    });
+  }
+
+  async createStaff(dto: CreateStaffAccountDto, user: AuthUser) {
+    const gymId = this.gymId(user);
+    try {
+      return await this.prisma.user.create({
+        data: {
+          gymId,
+          role: UserRole.RECEPTIONIST,
+          name: dto.name.trim(),
+          email: dto.email.trim().toLowerCase(),
+          passwordHash: await argon2.hash(dto.password),
+          emailVerifiedAt: new Date(),
+        },
+        select: { id: true, email: true, name: true, role: true, isActive: true, createdAt: true },
+      });
+    } catch (error) {
+      if (this.isUniqueConflict(error, 'email')) throw new ConflictException('Ese correo ya tiene una cuenta');
+      throw error;
+    }
+  }
+
+  async updateStaff(id: string, dto: UpdateStaffAccountDto, user: AuthUser) {
+    const gymId = this.gymId(user);
+    const account = await this.prisma.user.findFirst({
+      where: { id, gymId, role: UserRole.RECEPTIONIST },
+    });
+    if (!account) throw new NotFoundException('Recepcionista no encontrado');
+    const { password, email, ...fields } = dto;
+    try {
+      return await this.prisma.user.update({
+        where: { id },
+        data: {
+          ...fields,
+          ...(email ? { email: email.trim().toLowerCase() } : {}),
+          ...(password ? { passwordHash: await argon2.hash(password) } : {}),
+          ...((password || dto.isActive !== undefined) ? { tokenVersion: { increment: 1 } } : {}),
+        },
+        select: { id: true, email: true, name: true, role: true, isActive: true, createdAt: true },
+      });
+    } catch (error) {
+      if (this.isUniqueConflict(error, 'email')) throw new ConflictException('Ese correo ya tiene una cuenta');
+      throw error;
+    }
+  }
+
+  async deleteStaff(id: string, user: AuthUser) {
+    const gymId = this.gymId(user);
+    const account = await this.prisma.user.findFirst({
+      where: { id, gymId, role: UserRole.RECEPTIONIST },
+    });
+    if (!account) throw new NotFoundException('Recepcionista no encontrado');
+    const movements = await this.prisma.paymentMovement.count({ where: { actorUserId: id } });
+    if (movements > 0) {
+      await this.prisma.user.update({ where: { id }, data: { isActive: false, tokenVersion: { increment: 1 } } });
+      return { id, disposition: 'ARCHIVED' as const };
+    }
+    await this.prisma.user.delete({ where: { id } });
+    return { id, disposition: 'DELETED' as const };
   }
 
   async listGymMembers(gymId: string, search?: string) {

@@ -8,7 +8,7 @@ No comparte API, base de datos, tokens ni despliegue con GymFlow completo.
 
 | Carpeta | Usuario | Plataforma | Funciones |
 |---|---|---|---|
-| `mobile/` | `ADMIN` | Android (Expo) | Dashboard, miembros, planes, asignación de membresías, deuda y abonos. |
+| `mobile/` | `ADMIN`, `RECEPTIONIST` | Android (Expo) | Dashboard, miembros, planes, asignación de membresías, deuda y abonos. |
 | `superadmin-web/` | `SUPER_ADMIN` | Web | Alta/activación de gimnasios y métricas consolidadas del piloto. |
 | `backend/` | Ambos | NestJS REST | Autenticación, multi-tenancy, reglas de negocio y PostgreSQL. |
 
@@ -27,6 +27,7 @@ Incluye:
 - Recuperación de contraseña mediante código de 6 dígitos enviado por Gmail y cambio seguro desde Cuenta.
 
 - Registro y edición básica de miembros con carnet de identidad cubano (CI) obligatorio.
+- Varias cuentas por gimnasio, con perfiles fijos de administrador y recepcionista.
 - Catálogo de planes con precio y duración en días.
 - Una membresía activa y una renovación programada como máximo por miembro.
 - Vencimiento calculado desde la duración del plan.
@@ -36,19 +37,20 @@ Incluye:
 - Indicadores de miembros, membresías activas, ingresos cobrados y deuda.
 - Separación estricta entre gimnasios.
 
-No incluye en esta prueba: miembros con cuenta propia, entrenadores, rutinas, clases, reservas, QR, asistencia ni personal adicional.
+No incluye en esta prueba: miembros con cuenta propia, entrenadores, rutinas, clases ni reservas.
 
 ## Roles
 
-- `SUPER_ADMIN`: no pertenece a un gimnasio. Solo entra al panel web y ve la plataforma completa.
-- `ADMIN`: pertenece obligatoriamente a un gimnasio activo. Solo entra a la app Android y solo ve su tenant.
+- `SUPER_ADMIN`: no pertenece a un gimnasio. Solo entra al panel web, ve la plataforma completa y es el único que puede crear o retirar cuentas `ADMIN`.
+- `ADMIN`: pertenece obligatoriamente a un gimnasio activo. Gestiona configuración, planes, suscripción y cuentas de recepcionistas, además de la operación diaria. Para solicitar otro administrador contacta con soporte desde la app.
+- `RECEPTIONIST`: pertenece a un gimnasio y entra a la misma app Android. Gestiona miembros, membresías, cobros y asistencia; no puede modificar planes, suscripción ni cuentas.
 
 Ambos clientes rechazan el rol equivocado y el backend mantiene la autorización efectiva.
 
 ## Modelo
 
 ```text
-Gym 1--N User(ADMIN)
+Gym 1--N User(ADMIN|RECEPTIONIST)
 Gym 1--N Member
 Gym 1--N Plan
 Member 1--N Membership N--1 Plan

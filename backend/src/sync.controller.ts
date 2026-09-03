@@ -7,7 +7,7 @@ import { SyncService } from './sync.service';
 
 @ApiTags('offline-sync')
 @Controller('sync')
-@Roles(UserRole.ADMIN)
+@Roles(UserRole.ADMIN, UserRole.RECEPTIONIST)
 export class SyncController {
   constructor(private readonly sync: SyncService) {}
 

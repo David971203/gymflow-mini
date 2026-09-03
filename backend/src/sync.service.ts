@@ -1,7 +1,7 @@
-import { BadRequestException, ConflictException, HttpException, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import type { Prisma } from '@prisma/client';
+import { UserRole, type Prisma } from '@prisma/client';
 import type { AuthUser } from './common';
 import { CheckInAttendanceDto, CheckOutAttendanceDto } from './attendance.dto';
 import { AttendanceService } from './attendance.service';
@@ -92,6 +92,9 @@ export class SyncService {
   }
 
   private async apply(operation: SyncOperationDto, user: AuthUser): Promise<Pick<SyncResult, 'status' | 'result'>> {
+    if (user.role === UserRole.RECEPTIONIST && ['MEMBER_DELETE', 'PLAN_CREATE', 'PLAN_UPDATE', 'PLAN_DELETE', 'MEMBERSHIP_DELETE'].includes(operation.type)) {
+      throw new ForbiddenException('Tu rol no permite realizar esta operación');
+    }
     switch (operation.type) {
       case 'MEMBER_CREATE': {
         const dto = await this.payload(CreateMemberDto, { ...operation.payload, clientId: operation.entityId, occurredAt: operation.occurredAt });

@@ -7,7 +7,7 @@ describe('GymSubscriptionGuard', () => {
   const context = (method: string, role: UserRole = UserRole.ADMIN) => ({
     getHandler: () => ({}),
     getClass: () => ({}),
-    switchToHttp: () => ({ getRequest: () => ({ method, user: { id:'user-1', email:'admin@gym.cu', role, gymId: role === UserRole.ADMIN ? 'gym-1' : null } }) }),
+    switchToHttp: () => ({ getRequest: () => ({ method, user: { id:'user-1', email:'admin@gym.cu', role, gymId: role === UserRole.SUPER_ADMIN ? null : 'gym-1' } }) }),
   }) as never;
 
   it('permite consultar aunque la suscripción esté vencida', async () => {
@@ -42,5 +42,12 @@ describe('GymSubscriptionGuard', () => {
     const guard = createGuard({ gym: { findUnique } });
     await expect(guard.canActivate(context('DELETE',UserRole.SUPER_ADMIN))).resolves.toBe(true);
     expect(findUnique).not.toHaveBeenCalled();
+  });
+
+  it('aplica la membresía del gimnasio a las recepcionistas', async () => {
+    const findUnique = jest.fn().mockResolvedValue({ isActive:true, subscriptionPlan:'MONTHLY', subscriptionEndsAt:new Date(Date.now()-1) });
+    const guard = createGuard({ gym:{ findUnique } });
+    await expect(guard.canActivate(context('POST',UserRole.RECEPTIONIST))).rejects.toEqual(new ForbiddenException('Para continuar debes renovar la membresía de tu gimnasio.'));
+    expect(findUnique).toHaveBeenCalledWith(expect.objectContaining({ where:{ id:'gym-1' } }));
   });
 });

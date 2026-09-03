@@ -5,7 +5,7 @@ import { UserRole } from '@prisma/client';
 import type { Response } from 'express';
 import { CurrentUser, Roles, type AuthUser } from './common';
 import { MiniService } from './mini.service';
-import { ApplyPaymentDto, AssignGymMembershipDto, CreateGymAdminDto, CreateGymDto, CreateMemberDto, CreateMembershipDto, CreatePlanDto, RenewMembershipDto, ResolveSubscriptionRequestDto, UpdateGymAdminDto, UpdateGymDto, UpdateGymMembershipDto, UpdateGymStatusDto, UpdateGymSubscriptionDto, UpdateMemberDto, UpdatePlanDto } from './mini.dto';
+import { ApplyPaymentDto, AssignGymMembershipDto, CreateGymAdminDto, CreateGymDto, CreateMemberDto, CreateMembershipDto, CreatePlanDto, CreateStaffAccountDto, RenewMembershipDto, ResolveSubscriptionRequestDto, UpdateGymAdminDto, UpdateGymDto, UpdateGymMembershipDto, UpdateGymStatusDto, UpdateGymSubscriptionDto, UpdateMemberDto, UpdatePlanDto, UpdateStaffAccountDto } from './mini.dto';
 
 @ApiTags('super-admin')
 @Controller('platform')
@@ -46,15 +46,19 @@ export class PlatformController {
 
 @ApiTags('admin')
 @Controller()
-@Roles(UserRole.ADMIN)
+@Roles(UserRole.ADMIN, UserRole.RECEPTIONIST)
 export class AdminController {
   constructor(private readonly mini: MiniService) {}
+  @Get('staff') @Roles(UserRole.ADMIN) staff(@CurrentUser() user: AuthUser) { return this.mini.listStaff(user); }
+  @Post('staff') @Roles(UserRole.ADMIN) createStaff(@Body() dto: CreateStaffAccountDto, @CurrentUser() user: AuthUser) { return this.mini.createStaff(dto, user); }
+  @Patch('staff/:id') @Roles(UserRole.ADMIN) updateStaff(@Param('id') id: string, @Body() dto: UpdateStaffAccountDto, @CurrentUser() user: AuthUser) { return this.mini.updateStaff(id, dto, user); }
+  @Delete('staff/:id') @Roles(UserRole.ADMIN) deleteStaff(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.mini.deleteStaff(id, user); }
   @Get('dashboard') dashboard(@CurrentUser() user: AuthUser) { return this.mini.adminDashboard(user); }
 
   @Get('members') members(@CurrentUser() user: AuthUser, @Query('search') search?: string) { return this.mini.listMembers(user, search); }
   @Post('members') createMember(@Body() dto: CreateMemberDto, @CurrentUser() user: AuthUser) { return this.mini.createMember(dto, user); }
   @Patch('members/:id') updateMember(@Param('id') id: string, @Body() dto: UpdateMemberDto, @CurrentUser() user: AuthUser) { return this.mini.updateMember(id, dto, user); }
-  @Delete('members/:id') deleteMember(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.mini.deleteMember(id, user); }
+  @Delete('members/:id') @Roles(UserRole.ADMIN) deleteMember(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.mini.deleteMember(id, user); }
   @Post('members/:id/photo')
   @UseInterceptors(FileInterceptor('photo', { limits: { files: 1, fileSize: 250 * 1024 } }))
   uploadMemberPhoto(@Param('id') id: string, @UploadedFile() file: Express.Multer.File | undefined, @CurrentUser() user: AuthUser) { return this.mini.saveMemberPhoto(id, file, user); }
@@ -67,14 +71,14 @@ export class AdminController {
   @Delete('members/:id/photo') deleteMemberPhoto(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.mini.deleteMemberPhoto(id, user); }
 
   @Get('plans') plans(@CurrentUser() user: AuthUser) { return this.mini.listPlans(user); }
-  @Post('plans') createPlan(@Body() dto: CreatePlanDto, @CurrentUser() user: AuthUser) { return this.mini.createPlan(dto, user); }
-  @Patch('plans/:id') updatePlan(@Param('id') id: string, @Body() dto: UpdatePlanDto, @CurrentUser() user: AuthUser) { return this.mini.updatePlan(id, dto, user); }
-  @Delete('plans/:id') deletePlan(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.mini.deletePlan(id, user); }
+  @Post('plans') @Roles(UserRole.ADMIN) createPlan(@Body() dto: CreatePlanDto, @CurrentUser() user: AuthUser) { return this.mini.createPlan(dto, user); }
+  @Patch('plans/:id') @Roles(UserRole.ADMIN) updatePlan(@Param('id') id: string, @Body() dto: UpdatePlanDto, @CurrentUser() user: AuthUser) { return this.mini.updatePlan(id, dto, user); }
+  @Delete('plans/:id') @Roles(UserRole.ADMIN) deletePlan(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.mini.deletePlan(id, user); }
 
   @Get('memberships') memberships(@CurrentUser() user: AuthUser, @Query('memberId') memberId?: string) { return this.mini.listMemberships(user, memberId); }
   @Post('memberships') createMembership(@Body() dto: CreateMembershipDto, @CurrentUser() user: AuthUser) { return this.mini.createMembership(dto, user); }
   @Patch('memberships/:id') updateMembership(@Param('id') id: string, @Body() dto: UpdateGymMembershipDto, @CurrentUser() user: AuthUser) { return this.mini.updateMembership(id, dto, user); }
-  @Delete('memberships/:id') deleteMembership(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.mini.deleteMembership(id, user); }
+  @Delete('memberships/:id') @Roles(UserRole.ADMIN) deleteMembership(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.mini.deleteMembership(id, user); }
   @Post('memberships/:id/renew') renew(@Param('id') id: string, @Body() dto: RenewMembershipDto, @CurrentUser() user: AuthUser) { return this.mini.renewMembership(id, dto, user); }
 
   @Get('payments') payments(@CurrentUser() user: AuthUser) { return this.mini.listPayments(user); }

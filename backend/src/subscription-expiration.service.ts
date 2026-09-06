@@ -3,6 +3,7 @@ import { UserRole } from '@prisma/client';
 import { MailService } from './mail.service';
 import { PrismaService } from './prisma.service';
 import { subscriptionExpiryBoundary, subscriptionWarningStart } from './subscription-time';
+import { SubscriptionScheduleService } from './subscription-schedule.service';
 
 const WARNING_QUERY_WINDOW_MS = 4 * 24 * 60 * 60 * 1000;
 const CHECK_INTERVAL_MS = 15 * 60 * 1000;
@@ -13,7 +14,7 @@ export class SubscriptionExpirationService implements OnModuleInit, OnModuleDest
   private timer?: NodeJS.Timeout;
   private running = false;
 
-  constructor(private readonly prisma: PrismaService, private readonly mail: MailService) {}
+  constructor(private readonly prisma: PrismaService, private readonly mail: MailService, private readonly subscriptionSchedule?: SubscriptionScheduleService) {}
 
   async onModuleInit() {
     await this.runSafely();
@@ -39,6 +40,7 @@ export class SubscriptionExpirationService implements OnModuleInit, OnModuleDest
         subscriptionEndsAt:true,
         subscriptionWarningSentFor:true,
         subscriptionExpiredSentFor:true,
+        scheduledSubscriptionStartsAt:true,
         users:{
           where:{ role:UserRole.ADMIN, isActive:true },
           select:{ email:true, name:true },
@@ -49,6 +51,10 @@ export class SubscriptionExpirationService implements OnModuleInit, OnModuleDest
     let warnings = 0;
     let expired = 0;
     for (const gym of gyms) {
+      if (gym.scheduledSubscriptionStartsAt && gym.scheduledSubscriptionStartsAt <= now) {
+        await this.subscriptionSchedule?.activateDue(gym.id, now);
+        continue;
+      }
       const endsAt = gym.subscriptionEndsAt;
       if (!endsAt || !gym.users.length) continue;
       const expiryBoundary = subscriptionExpiryBoundary(endsAt);

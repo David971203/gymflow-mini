@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, HttpStatus, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { GymSubscriptionPlan, Prisma, SubscriptionRequestStatus, UserRole } from '@prisma/client';
+import { GymSubscriptionPlan, Prisma, SubscriptionRequestAction, SubscriptionRequestStatus, UserRole } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'crypto';
 import { PrismaService } from './prisma.service';
@@ -8,6 +8,9 @@ import { ChangePasswordDto, ForgotPasswordDto, GoogleLoginDto, LoginDto, Registe
 import type { AuthUser } from './common';
 import { GoogleIdentityService } from './google-identity.service';
 import { MailService } from './mail.service';
+import { subscriptionIsActiveThroughDay, subscriptionWarningStart } from './subscription-time';
+import { SubscriptionScheduleService } from './subscription-schedule.service';
+import { assertCubanLocation } from './cuba-locations';
 
 const PLATFORM_SUBSCRIPTION_PRICES: Record<GymSubscriptionPlan, number> = {
   [GymSubscriptionPlan.TRIAL]: 0,
@@ -22,7 +25,7 @@ const TRIAL_IP_REQUEST_LIMIT = 20;
 
 @Injectable()
 export class AuthService {
-  constructor(private readonly prisma: PrismaService, private readonly jwt: JwtService, private readonly mail: MailService, private readonly googleIdentity?: GoogleIdentityService) {}
+  constructor(private readonly prisma: PrismaService, private readonly jwt: JwtService, private readonly mail: MailService, private readonly googleIdentity?: GoogleIdentityService, private readonly subscriptionSchedule?: SubscriptionScheduleService) {}
 
   private normalizePhone(value: string) {
     let phone = value.replace(/\D/g, '');
@@ -52,9 +55,37 @@ export class AuthService {
     return process.env.NODE_ENV === 'production' || process.env.EMAIL_VERIFICATION_REQUIRED?.trim().toLowerCase() === 'true';
   }
 
-  private publicSubscriptionRequest(request: { id:string; code:string; plan:GymSubscriptionPlan; status:SubscriptionRequestStatus; requestedAt:Date; resolvedAt:Date | null } | null | undefined) {
+  private publicSubscriptionRequest(request: { id:string; code:string; plan:GymSubscriptionPlan; action:SubscriptionRequestAction; fromPlan:GymSubscriptionPlan | null; status:SubscriptionRequestStatus; requestedAt:Date; resolvedAt:Date | null } | null | undefined) {
     if (!request) return null;
-    return { id:request.id, code:request.code, plan:request.plan, status:request.status, requestedAt:request.requestedAt, resolvedAt:request.resolvedAt };
+    return { id:request.id, code:request.code, plan:request.plan, action:request.action, fromPlan:request.fromPlan, status:request.status, requestedAt:request.requestedAt, resolvedAt:request.resolvedAt };
+  }
+
+  private assertSubscriptionAction(gym: { subscriptionPlan:GymSubscriptionPlan | null; subscriptionEndsAt:Date | null; scheduledSubscriptionPlan:GymSubscriptionPlan | null }, dto: SelectSubscriptionDto, now: Date) {
+    if (gym.scheduledSubscriptionPlan) throw new ConflictException('Ya existe un cambio de plan programado');
+    const current = gym.subscriptionPlan;
+    if (!current) {
+      if (dto.action !== SubscriptionRequestAction.ACTIVATE) throw new ConflictException('Debes activar primero una suscripción');
+      return;
+    }
+    if (dto.action === SubscriptionRequestAction.ACTIVATE) throw new ConflictException('Este gimnasio ya tiene una suscripción');
+    if (dto.action === SubscriptionRequestAction.RENEW) {
+      if (current === GymSubscriptionPlan.TRIAL || dto.plan !== current) throw new ConflictException('La renovación debe conservar el plan actual');
+      this.assertRenewalWindow(gym.subscriptionEndsAt, now);
+      return;
+    }
+    if (dto.action !== SubscriptionRequestAction.CHANGE || dto.plan === current || dto.plan === GymSubscriptionPlan.TRIAL) throw new ConflictException('El cambio de plan solicitado no es válido');
+    const immediateUpgrade = current === GymSubscriptionPlan.MONTHLY && dto.plan === GymSubscriptionPlan.ANNUAL;
+    const trialPurchase = current === GymSubscriptionPlan.TRIAL;
+    if (!immediateUpgrade && !trialPurchase) this.assertRenewalWindow(gym.subscriptionEndsAt, now);
+  }
+
+  private assertRenewalWindow(endsAt: Date | null, now: Date) {
+    if (!subscriptionIsActiveThroughDay(endsAt, now) || !endsAt) return;
+    const availableAt = subscriptionWarningStart(endsAt);
+    if (now < availableAt) {
+      const date = new Intl.DateTimeFormat('es-CU', { timeZone:'America/Havana', day:'numeric', month:'long', year:'numeric' }).format(availableAt);
+      throw new ConflictException(`Esta operación estará disponible a partir del ${date}, cuando falten 3 días para el vencimiento`);
+    }
   }
 
   private async sendEmailVerificationCode(user: { id:string; email:string; name:string }) {
@@ -84,6 +115,10 @@ export class AuthService {
   }
 
   private async profile(userId: string) {
+    if (this.subscriptionSchedule) {
+      const identity = await this.prisma.user.findUnique({ where:{ id:userId }, select:{ gymId:true } });
+      if (identity?.gymId) await this.subscriptionSchedule.activateDue(identity.gymId);
+    }
     const found = await this.prisma.user.findUnique({
       where: { id: userId },
       include: { gym: { include: { subscriptionRequests: { orderBy: { requestedAt: 'desc' }, take: 1 } } } },
@@ -127,13 +162,16 @@ export class AuthService {
   }
 
   async register(dto: RegisterDto) {
+    const province = dto.province.trim();
+    const municipality = dto.municipality.trim();
+    assertCubanLocation(province, municipality);
     const email = dto.email.trim().toLowerCase();
     const phone = this.normalizePhone(dto.phone);
     const passwordHash = await argon2.hash(dto.password);
     const verificationRequired = this.emailVerificationRequired();
     try {
       const user = await this.prisma.$transaction(async (tx) => {
-        const gym = await tx.gym.create({ data: { name: dto.gymName.trim(), slug: this.slug(dto.gymName), province: dto.province?.trim() || null, phone, currency: 'CUP', isActive: true } });
+        const gym = await tx.gym.create({ data: { name: dto.gymName.trim(), slug: this.slug(dto.gymName), province, municipality, phone, currency: 'CUP', isActive: true } });
         return tx.user.create({ data: { email, phone, passwordHash, name: dto.ownerName.trim(), role: UserRole.ADMIN, gymId: gym.id, emailVerifiedAt:verificationRequired ? null : new Date() } });
       });
       if (verificationRequired) {
@@ -194,10 +232,12 @@ export class AuthService {
 
   async selectSubscription(user: AuthUser, dto: SelectSubscriptionDto, requestIp?: string) {
     if (!user.gymId) throw new ConflictException('La cuenta no pertenece a un gimnasio');
+    await this.subscriptionSchedule?.activateDue(user.gymId);
     const owner = await this.prisma.user.findUnique({ where: { id: user.id }, select: { phone: true } });
     if (!owner?.phone) throw new ConflictException('La cuenta no tiene un teléfono móvil registrado');
 
     if (dto.plan === GymSubscriptionPlan.TRIAL) {
+      if (dto.action !== SubscriptionRequestAction.ACTIVATE) throw new ConflictException('La prueba solo puede solicitarse como activación inicial');
       const now = new Date();
       const hashedDevice = this.deviceHash(dto.deviceId);
       const hashedIp = this.ipHash(requestIp);
@@ -230,17 +270,20 @@ export class AuthService {
         const gym = await tx.gym.findUniqueOrThrow({ where: { id: user.gymId! } });
         if (gym.subscriptionPlan) throw new ConflictException('Este gimnasio ya utilizó o tiene una suscripción');
         await tx.subscriptionRequest.updateMany({ where: { gymId: user.gymId!, status: SubscriptionRequestStatus.PENDING }, data: { status: SubscriptionRequestStatus.CANCELLED, resolvedAt: now } });
-        return tx.subscriptionRequest.create({ data: { code: `GF-T-${randomBytes(3).toString('hex').toUpperCase()}`, gymId: user.gymId!, plan: GymSubscriptionPlan.TRIAL, verificationPhone: owner.phone!, deviceHash: hashedDevice, ipHash: hashedIp, lastRequestedAt: now } });
+        return tx.subscriptionRequest.create({ data: { code: `GF-T-${randomBytes(3).toString('hex').toUpperCase()}`, gymId: user.gymId!, plan: GymSubscriptionPlan.TRIAL, action: SubscriptionRequestAction.ACTIVATE, verificationPhone: owner.phone!, deviceHash: hashedDevice, ipHash: hashedIp, lastRequestedAt: now } });
       });
       return { user: await this.profile(user.id), request: this.publicSubscriptionRequest(request) };
     }
 
-    const existing = await this.prisma.subscriptionRequest.findFirst({ where: { gymId: user.gymId, plan: dto.plan, status: SubscriptionRequestStatus.PENDING }, orderBy: { requestedAt: 'desc' } });
+    const now = new Date();
+    const gym = await this.prisma.gym.findUnique({ where:{ id:user.gymId }, select:{ subscriptionPlan:true, subscriptionEndsAt:true, scheduledSubscriptionPlan:true } });
+    if (!gym) throw new ConflictException('El gimnasio no existe');
+    this.assertSubscriptionAction(gym, dto, now);
+    const existing = await this.prisma.subscriptionRequest.findFirst({ where: { gymId: user.gymId, plan: dto.plan, action: dto.action, status: SubscriptionRequestStatus.PENDING }, orderBy: { requestedAt: 'desc' } });
     if (existing) return { user: await this.profile(user.id), request: this.publicSubscriptionRequest(existing) };
     const request = await this.prisma.$transaction(async (tx) => {
-      const now = new Date();
       await tx.subscriptionRequest.updateMany({ where: { gymId: user.gymId!, status: SubscriptionRequestStatus.PENDING }, data: { status: SubscriptionRequestStatus.CANCELLED, resolvedAt: now } });
-      return tx.subscriptionRequest.create({ data: { code: `GF-${randomBytes(3).toString('hex').toUpperCase()}`, gymId: user.gymId!, plan: dto.plan } });
+      return tx.subscriptionRequest.create({ data: { code: `GF-${randomBytes(3).toString('hex').toUpperCase()}`, gymId: user.gymId!, plan: dto.plan, action:dto.action, fromPlan:gym.subscriptionPlan, previousEndsAt:gym.subscriptionEndsAt } });
     });
     return { user: await this.profile(user.id), request: this.publicSubscriptionRequest(request) };
   }

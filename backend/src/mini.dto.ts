@@ -5,7 +5,8 @@ import { IsArray, IsBoolean, IsDateString, IsEmail, IsEnum, IsIn, IsInt, IsNumbe
 export class CreateGymDto {
   @IsString() @MaxLength(100) name: string;
   @IsString() @MaxLength(80) slug: string;
-  @IsOptional() @IsString() province?: string;
+  @IsString() @MaxLength(100) province: string;
+  @IsString() @MaxLength(100) municipality: string;
   @IsOptional() @IsString() phone?: string;
   @IsIn(['CUP', 'USD']) currency: 'CUP' | 'USD';
   @IsEmail() adminEmail: string;
@@ -30,6 +31,7 @@ export class UpdateGymDto {
   @IsOptional() @IsString() @MaxLength(100) name?: string;
   @IsOptional() @IsString() @MaxLength(80) @Matches(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, { message: 'El identificador solo admite minúsculas, números y guiones' }) slug?: string;
   @IsOptional() @IsString() @MaxLength(100) province?: string;
+  @IsOptional() @IsString() @MaxLength(100) municipality?: string;
   @IsOptional() @IsString() @MaxLength(30) phone?: string;
   @IsOptional() @IsIn(['CUP', 'USD']) currency?: 'CUP' | 'USD';
   @IsOptional() @IsBoolean() isActive?: boolean;

@@ -1,11 +1,12 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { GymSubscriptionPlan, MembershipStatus, PaymentStatus, Prisma, SubscriptionRequestStatus, UserRole } from '@prisma/client';
+import { GymSubscriptionPlan, MembershipStatus, PaymentStatus, Prisma, SubscriptionRequestAction, SubscriptionRequestStatus, UserRole } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { PrismaService } from './prisma.service';
 import type { AuthUser } from './common';
 import { ApplyPaymentDto, AssignGymMembershipDto, CreateGymAdminDto, CreateGymDto, CreateMemberDto, CreateMembershipDto, CreatePlanDto, CreateStaffAccountDto, RenewMembershipDto, UpdateGymAdminDto, UpdateGymDto, UpdateGymMembershipDto, UpdateMemberDto, UpdatePlanDto, UpdateStaffAccountDto } from './mini.dto';
 import { membershipDayStart, membershipHasExpired, nextMembershipDayStart } from './membership-time';
-import { subscriptionIsActiveThroughDay } from './subscription-time';
+import { subscriptionExpiryBoundary, subscriptionIsActiveThroughDay } from './subscription-time';
+import { assertCubanLocation } from './cuba-locations';
 
 const membershipInclude = {
   member: { select: { id: true, gymId: true, ci: true, firstName: true, lastName: true, phone: true } },
@@ -37,13 +38,16 @@ export class MiniService {
   }
 
   async createGym(dto: CreateGymDto) {
+    const province = dto.province.trim();
+    const municipality = dto.municipality.trim();
+    assertCubanLocation(province, municipality);
     const existing = await this.prisma.user.findUnique({ where: { email: dto.adminEmail.toLowerCase() } });
     if (existing) throw new ConflictException('Ese correo ya tiene una cuenta');
     return this.prisma.$transaction(async (tx) => {
       const subscriptionStartedAt = new Date();
       const subscriptionTrialDays = dto.subscriptionTrialDays ?? 7;
       const subscriptionEndsAt = this.subscriptionEnd(subscriptionStartedAt, dto.subscriptionPlan, subscriptionTrialDays);
-      const gym = await tx.gym.create({ data: { name: dto.name, slug: dto.slug.toLowerCase(), province: dto.province, phone: dto.phone, currency: dto.currency, subscriptionPlan: dto.subscriptionPlan, subscriptionTrialDays, subscriptionStartedAt, subscriptionEndsAt } });
+      const gym = await tx.gym.create({ data: { name: dto.name, slug: dto.slug.toLowerCase(), province, municipality, phone: dto.phone, currency: dto.currency, subscriptionPlan: dto.subscriptionPlan, subscriptionTrialDays, subscriptionStartedAt, subscriptionEndsAt } });
       await tx.platformSubscription.create({ data: { gymId: gym.id, plan: dto.subscriptionPlan, amount: PLATFORM_SUBSCRIPTION_PRICES[dto.subscriptionPlan], startedAt: subscriptionStartedAt, endsAt: subscriptionEndsAt } });
       await tx.user.create({ data: { email: dto.adminEmail.toLowerCase(), passwordHash: await argon2.hash(dto.adminPassword), name: dto.adminName, role: UserRole.ADMIN, gymId: gym.id } });
       return gym;
@@ -77,10 +81,17 @@ export class MiniService {
     if (!request) throw new NotFoundException('Solicitud no encontrada');
     if (request.status !== SubscriptionRequestStatus.PENDING) throw new ConflictException('Esta solicitud ya fue resuelta');
     const now = new Date();
-    const startedAt = request.plan === GymSubscriptionPlan.TRIAL
-      ? now
-      : subscriptionIsActiveThroughDay(request.gym.subscriptionEndsAt, now) ? request.gym.subscriptionEndsAt! : now;
+    const active = subscriptionIsActiveThroughDay(request.gym.subscriptionEndsAt, now);
+    if (request.plan !== GymSubscriptionPlan.TRIAL) {
+      if (request.action === SubscriptionRequestAction.ACTIVATE && request.gym.subscriptionPlan) throw new ConflictException('El gimnasio ya tiene una suscripción; crea una nueva solicitud');
+      if (request.action !== SubscriptionRequestAction.ACTIVATE && request.fromPlan !== request.gym.subscriptionPlan) throw new ConflictException('El plan actual cambió; crea una nueva solicitud');
+      if (request.previousEndsAt?.getTime() !== request.gym.subscriptionEndsAt?.getTime()) throw new ConflictException('La fecha de vencimiento cambió; crea una nueva solicitud');
+    }
+    const immediateUpgrade = request.action === SubscriptionRequestAction.CHANGE && request.fromPlan === GymSubscriptionPlan.MONTHLY && request.plan === GymSubscriptionPlan.ANNUAL;
+    const startsImmediately = request.plan === GymSubscriptionPlan.TRIAL || request.action === SubscriptionRequestAction.ACTIVATE || immediateUpgrade || !active;
+    const startedAt = startsImmediately ? now : subscriptionExpiryBoundary(request.gym.subscriptionEndsAt!);
     const endsAt = this.subscriptionEnd(startedAt, request.plan, request.gym.subscriptionTrialDays);
+    const scheduledChange = !startsImmediately && request.action === SubscriptionRequestAction.CHANGE;
     try {
       return await this.prisma.$transaction(async (tx) => {
         const claimed = await tx.subscriptionRequest.updateMany({ where: { id, status: SubscriptionRequestStatus.PENDING }, data: { status, resolvedAt: now } });
@@ -92,7 +103,13 @@ export class MiniService {
           await tx.trialClaim.create({ data: { gymId: request.gymId, phone: request.verificationPhone, deviceHash: request.deviceHash } });
           await tx.user.updateMany({ where: { gymId: request.gymId, role: UserRole.ADMIN, phone: request.verificationPhone }, data: { phoneVerifiedAt: now } });
         }
-        await tx.gym.update({ where: { id: request.gymId }, data: { subscriptionPlan: request.plan, subscriptionStartedAt: startedAt, subscriptionEndsAt: endsAt } });
+        if (scheduledChange) {
+          await tx.gym.update({ where: { id: request.gymId }, data: { scheduledSubscriptionPlan: request.plan, scheduledSubscriptionStartsAt: startedAt, scheduledSubscriptionEndsAt: endsAt } });
+        } else if (request.action === SubscriptionRequestAction.RENEW && active) {
+          await tx.gym.update({ where: { id: request.gymId }, data: { subscriptionEndsAt: endsAt, subscriptionWarningSentFor: null, subscriptionExpiredSentFor: null } });
+        } else {
+          await tx.gym.update({ where: { id: request.gymId }, data: { subscriptionPlan: request.plan, subscriptionStartedAt: startedAt, subscriptionEndsAt: endsAt, subscriptionWarningSentFor: null, subscriptionExpiredSentFor: null } });
+        }
         await tx.platformSubscription.create({ data: { gymId: request.gymId, plan: request.plan, amount: PLATFORM_SUBSCRIPTION_PRICES[request.plan], startedAt, endsAt } });
         return tx.subscriptionRequest.findUniqueOrThrow({ where: { id }, include: { gym: true } });
       });
@@ -117,9 +134,13 @@ export class MiniService {
   }
 
   async updateGym(id: string, dto: UpdateGymDto) {
-    await this.requireGym(id);
+    const current = await this.requireGym(id);
+    const province = (dto.province ?? current.province)?.trim();
+    const municipality = (dto.municipality ?? current.municipality)?.trim();
+    if (!province || !municipality) throw new BadRequestException('Selecciona la provincia y el municipio del gimnasio');
+    assertCubanLocation(province, municipality);
     try {
-      return await this.prisma.gym.update({ where: { id }, data: { ...dto, ...(dto.slug ? { slug: dto.slug.toLowerCase() } : {}) } });
+      return await this.prisma.gym.update({ where: { id }, data: { ...dto, province, municipality, ...(dto.slug ? { slug: dto.slug.toLowerCase() } : {}) } });
     } catch (error) {
       if (this.isUniqueConflict(error, 'slug')) throw new ConflictException('Ese identificador de gimnasio ya está en uso');
       throw error;
@@ -137,7 +158,7 @@ export class MiniService {
     const subscriptionTrialDays = requestedTrialDays ?? gym.subscriptionTrialDays ?? 7;
     const subscriptionEndsAt = this.subscriptionEnd(subscriptionStartedAt, subscriptionPlan, subscriptionTrialDays);
     return this.prisma.$transaction(async (tx) => {
-      const updated = await tx.gym.update({ where: { id }, data: { subscriptionPlan, subscriptionTrialDays, subscriptionStartedAt, subscriptionEndsAt } });
+      const updated = await tx.gym.update({ where: { id }, data: { subscriptionPlan, subscriptionTrialDays, subscriptionStartedAt, subscriptionEndsAt, scheduledSubscriptionPlan:null, scheduledSubscriptionStartsAt:null, scheduledSubscriptionEndsAt:null } });
       await tx.platformSubscription.create({ data: { gymId: id, plan: subscriptionPlan, amount: PLATFORM_SUBSCRIPTION_PRICES[subscriptionPlan], startedAt: subscriptionStartedAt, endsAt: subscriptionEndsAt } });
       return updated;
     });
@@ -147,7 +168,7 @@ export class MiniService {
     await this.requireGym(id);
     return this.prisma.gym.update({
       where: { id },
-      data: { subscriptionPlan: null, subscriptionStartedAt: null, subscriptionEndsAt: null },
+      data: { subscriptionPlan: null, subscriptionStartedAt: null, subscriptionEndsAt: null, scheduledSubscriptionPlan:null, scheduledSubscriptionStartsAt:null, scheduledSubscriptionEndsAt:null },
     });
   }
 
@@ -203,6 +224,15 @@ export class MiniService {
     }
     await this.prisma.user.delete({ where: { id } });
     return { id, disposition: 'DELETED' };
+  }
+
+  async listGymStaff(gymId: string) {
+    await this.requireGym(gymId);
+    return this.prisma.user.findMany({
+      where: { gymId, role: { in: [UserRole.ADMIN, UserRole.RECEPTIONIST] } },
+      select: { id: true, email: true, name: true, role: true, isActive: true, createdAt: true },
+      orderBy: [{ role: 'asc' }, { isActive: 'desc' }, { name: 'asc' }],
+    });
   }
 
   async listStaff(user: AuthUser) {

@@ -64,15 +64,15 @@ export const api = {
     const result = await request<{ accessToken: string; user: User }>('/auth/password/change', { method: 'POST', body: JSON.stringify(input) });
     return persistSession(result);
   },
-  register: async (input: { ownerName: string; gymName: string; province?: string; phone: string; email: string; password: string }) => {
+  register: async (input: { ownerName: string; gymName: string; province: string; municipality: string; phone: string; email: string; password: string }) => {
     const result = await request<{ accessToken: string; user: User } | { verificationRequired: true; email: string; message: string; retryAfterSeconds: number }>('/auth/register', { method: 'POST', body: JSON.stringify({ ...input, deviceId: await deviceId() }) });
     if ('verificationRequired' in result) return result;
     return { verificationRequired:false as const, user:await persistSession(result) };
   },
   verifyEmail: async (email: string, code: string) => persistSession(await request<{ accessToken: string; user: User }>('/auth/email/verify', { method:'POST', body:JSON.stringify({ email, code }) })),
   resendEmailVerification: (email: string) => request<{ message:string; retryAfterSeconds:number }>('/auth/email/resend', { method:'POST', body:JSON.stringify({ email }) }),
-  selectSubscription: async (plan: 'TRIAL' | 'MONTHLY' | 'ANNUAL') => {
-    const result = await request<{ user: User }>('/auth/subscription', { method: 'POST', body: JSON.stringify({ plan, deviceId: await deviceId() }) });
+  selectSubscription: async (plan: 'TRIAL' | 'MONTHLY' | 'ANNUAL', action: 'ACTIVATE' | 'RENEW' | 'CHANGE') => {
+    const result = await request<{ user: User }>('/auth/subscription', { method: 'POST', body: JSON.stringify({ plan, action, deviceId: await deviceId() }) });
     return persistSession(result);
   },
   refreshProfile: async () => persistSession({ user: await request<User>('/auth/me') }),

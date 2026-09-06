@@ -7,6 +7,7 @@ import { usePathname } from "next/navigation";
 type MemberTrendPoint = { month: string; members: number };
 type Overview = { gyms: number; activeGyms: number; members: number; newMembers: number; monthlyRevenue: number; pendingDebt: number; memberTrend: MemberTrendPoint[]; subscriptionMonthlyRevenue: number; subscriptionTotalRevenue: number; activeTrialSubscriptions: number; activeMonthlySubscriptions: number; activeAnnualSubscriptions: number; expiredSubscriptions: number; withoutSubscriptions:number; pendingSubscriptionRequests:number };
 type Admin = { id: string; name: string; email: string; isActive: boolean; createdAt?: string };
+type StaffAccount = Admin & { role: "ADMIN" | "RECEPTIONIST" };
 type Plan = { id: string; name: string; description?: string; price: number | string; durationDays: number; isActive: boolean; createdAt?: string; updatedAt?: string };
 type DeleteOutcome = { id: string; disposition: "DELETED" | "ARCHIVED" };
 type Notice = { message: string; tone: "success" | "error" | "warning" };
@@ -18,12 +19,13 @@ type Payment = { id: string; amount: number | string; paidAmount: number | strin
 type GymFinances = { totalBilled: number; totalCollected: number; pendingBalance: number; overdueBalance: number; monthlyRevenue: number; pendingPayments: number; recentMovements: Array<PaymentMovement & { payment: Payment }> };
 type SubscriptionPlan = "TRIAL" | "MONTHLY" | "ANNUAL";
 type PlatformSubscription = { id:string; plan:SubscriptionPlan; amount:number|string; startedAt:string; endsAt:string; activatedAt:string; gym:{ id:string; name:string; slug:string } };
-type SubscriptionRequest = { id:string; code:string; plan:SubscriptionPlan; status:"PENDING"|"APPROVED"|"REJECTED"|"CANCELLED"; requestedAt:string; resolvedAt?:string|null; verificationPhone?:string|null; resendCount?:number; gym:{id:string;name:string;phone?:string;province?:string;users:Array<{id:string;name:string;email:string;phone?:string}>} };
+type SubscriptionRequest = { id:string; code:string; plan:SubscriptionPlan; action:"ACTIVATE"|"RENEW"|"CHANGE"; fromPlan?:SubscriptionPlan|null; status:"PENDING"|"APPROVED"|"REJECTED"|"CANCELLED"; requestedAt:string; resolvedAt?:string|null; verificationPhone?:string|null; resendCount?:number; gym:{id:string;name:string;phone?:string;province?:string;users:Array<{id:string;name:string;email:string;phone?:string}>} };
 type Gym = {
   id: string;
   name: string;
   slug: string;
   province?: string;
+  municipality?: string;
   phone?: string;
   currency?: string;
   isActive: boolean;
@@ -31,6 +33,9 @@ type Gym = {
   subscriptionTrialDays: number;
   subscriptionStartedAt: string | null;
   subscriptionEndsAt: string | null;
+  scheduledSubscriptionPlan?: SubscriptionPlan | null;
+  scheduledSubscriptionStartsAt?: string | null;
+  scheduledSubscriptionEndsAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
   _count: { members: number; plans?: number; payments?: number };
@@ -38,39 +43,40 @@ type Gym = {
 };
 
 const API = `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3100"}/api`;
-const CUBAN_PROVINCES = [
-  "Pinar del Río",
-  "Artemisa",
-  "La Habana",
-  "Mayabeque",
-  "Matanzas",
-  "Cienfuegos",
-  "Villa Clara",
-  "Sancti Spíritus",
-  "Ciego de Ávila",
-  "Camagüey",
-  "Las Tunas",
-  "Holguín",
-  "Granma",
-  "Santiago de Cuba",
-  "Guantánamo",
-  "Isla de la Juventud",
-] as const;
+const CUBA_LOCATIONS: Record<string,string[]> = {
+  "Pinar del Río":["Consolación del Sur","Guane","La Palma","Los Palacios","Mantua","Minas de Matahambre","Pinar del Río","San Juan y Martínez","San Luis","Sandino","Viñales"],
+  Artemisa:["Alquízar","Artemisa","Bauta","Caimito","Guanajay","Güira de Melena","Mariel","San Antonio de los Baños","Bahía Honda","San Cristóbal","Candelaria"],
+  Mayabeque:["Batabanó","Bejucal","Güines","Jaruco","Madruga","Melena del Sur","Nueva Paz","Quivicán","San José de las Lajas","San Nicolás de Bari","Santa Cruz del Norte"],
+  "La Habana":["Arroyo Naranjo","Boyeros","Centro Habana","Cerro","Cotorro","Diez de Octubre","Guanabacoa","Habana del Este","Habana Vieja","La Lisa","Marianao","Playa","Plaza","Regla","San Miguel del Padrón"],
+  Matanzas:["Calimete","Cárdenas","Ciénaga de Zapata","Colón","Jagüey Grande","Jovellanos","Limonar","Los Arabos","Martí","Matanzas","Pedro Betancourt","Perico","Unión de Reyes"],
+  Cienfuegos:["Abreus","Aguada de Pasajeros","Cienfuegos","Cruces","Cumanayagua","Palmira","Rodas","Santa Isabel de las Lajas"],
+  "Villa Clara":["Caibarién","Camajuaní","Cifuentes","Corralillo","Encrucijada","Manicaragua","Placetas","Quemado de Güines","Ranchuelo","Remedios","Sagua la Grande","Santa Clara","Santo Domingo"],
+  "Sancti Spíritus":["Cabaigúan","Fomento","Jatibonico","La Sierpe","Sancti Spíritus","Taguasco","Trinidad","Yaguajay"],
+  "Ciego de Ávila":["Ciro Redondo","Baraguá","Bolivia","Chambas","Ciego de Ávila","Florencia","Majagua","Morón","Primero de Enero","Venezuela"],
+  Camagüey:["Camagüey","Carlos Manuel de Céspedes","Esmeralda","Florida","Guaimaro","Jimagüayú","Minas","Najasa","Nuevitas","Santa Cruz del Sur","Sibanicú","Sierra de Cubitas","Vertientes"],
+  "Las Tunas":["Amancio Rodríguez","Colombia","Jesús Menéndez","Jobabo","Las Tunas","Majibacoa","Manatí","Puerto Padre"],
+  Holguín:["Antilla","Báguanos","Banes","Cacocum","Calixto García","Cueto","Frank País","Gibara","Holguín","Mayarí","Moa","Rafael Freyre","Sagua de Tánamo","Urbano Noris"],
+  Granma:["Bartolomé Masó","Bayamo","Buey Arriba","Campechuela","Cauto Cristo","Guisa","Jiguaní","Manzanillo","Media Luna","Niquero","Pilón","Río Cauto","Yara"],
+  "Santiago de Cuba":["Contramaestre","Guamá","Julio Antonio Mella","Palma Soriano","San Luis","Santiago de Cuba","Segundo Frente","Songo la Maya","Tercer Frente"],
+  Guantánamo:["Baracoa","Caimanera","El Salvador","Guantánamo","Imías","Maisí","Manuel Tames","Niceto Pérez","San Antonio del Sur","Yateras"],
+  "Isla de la Juventud":["Isla de la Juventud"],
+};
+const CUBAN_PROVINCES=Object.keys(CUBA_LOCATIONS);
 const normalizeSearch = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("es-CU").trim();
 const demoSubscriptionEnd = new Date(); demoSubscriptionEnd.setFullYear(demoSubscriptionEnd.getFullYear() + 1);
 const recentMonthKeys = () => Array.from({ length: 6 }, (_, index) => { const date = new Date(); date.setDate(1); date.setMonth(date.getMonth() - (5 - index)); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`; });
 const demoOverview: Overview = { gyms: 3, activeGyms: 3, members: 341, newMembers: 38, monthlyRevenue: 98050, pendingDebt: 12300, memberTrend: recentMonthKeys().map((month, index) => ({ month, members: [21, 28, 25, 31, 34, 38][index] })), subscriptionMonthlyRevenue:55000, subscriptionTotalRevenue:55000, activeTrialSubscriptions:1, activeMonthlySubscriptions:1, activeAnnualSubscriptions:1, expiredSubscriptions:0, withoutSubscriptions:0, pendingSubscriptionRequests:1 };
 const demoGyms: Gym[] = [
-  { id: "1", name: "Habana Fitness", slug: "habana-fitness", province: "La Habana", phone: "+53 5 123 4567", currency: "CUP", isActive: true, subscriptionPlan:"ANNUAL", subscriptionTrialDays:7, subscriptionStartedAt:new Date().toISOString(), subscriptionEndsAt:demoSubscriptionEnd.toISOString(), _count: { members: 184, plans: 3, payments: 172 }, users: [{ id: "a1", name: "Laura", email: "admin@habanafitness.cu", isActive: true }] },
-  { id: "2", name: "Titan Gym", slug: "titan-gym", province: "Villa Clara", currency: "CUP", isActive: true, subscriptionPlan:"MONTHLY", subscriptionTrialDays:7, subscriptionStartedAt:new Date().toISOString(), subscriptionEndsAt:demoSubscriptionEnd.toISOString(), _count: { members: 96, plans: 2, payments: 88 }, users: [{ id: "a2", name: "Carlos", email: "admin@titangym.cu", isActive: true }] },
-  { id: "3", name: "Zona Fuerte", slug: "zona-fuerte", province: "Santiago de Cuba", currency: "CUP", isActive: true, subscriptionPlan:"TRIAL", subscriptionTrialDays:7, subscriptionStartedAt:new Date().toISOString(), subscriptionEndsAt:demoSubscriptionEnd.toISOString(), _count: { members: 61, plans: 3, payments: 55 }, users: [{ id: "a3", name: "Marta", email: "admin@zonafuerte.cu", isActive: true }] },
+  { id: "1", name: "Habana Fitness", slug: "habana-fitness", province: "La Habana", municipality:"Plaza", phone: "+53 5 123 4567", currency: "CUP", isActive: true, subscriptionPlan:"ANNUAL", subscriptionTrialDays:7, subscriptionStartedAt:new Date().toISOString(), subscriptionEndsAt:demoSubscriptionEnd.toISOString(), _count: { members: 184, plans: 3, payments: 172 }, users: [{ id: "a1", name: "Laura", email: "admin@habanafitness.cu", isActive: true }] },
+  { id: "2", name: "Titan Gym", slug: "titan-gym", province: "Villa Clara", municipality:"Santa Clara", currency: "CUP", isActive: true, subscriptionPlan:"MONTHLY", subscriptionTrialDays:7, subscriptionStartedAt:new Date().toISOString(), subscriptionEndsAt:demoSubscriptionEnd.toISOString(), _count: { members: 96, plans: 2, payments: 88 }, users: [{ id: "a2", name: "Carlos", email: "admin@titangym.cu", isActive: true }] },
+  { id: "3", name: "Zona Fuerte", slug: "zona-fuerte", province: "Santiago de Cuba", municipality:"Santiago de Cuba", currency: "CUP", isActive: true, subscriptionPlan:"TRIAL", subscriptionTrialDays:7, subscriptionStartedAt:new Date().toISOString(), subscriptionEndsAt:demoSubscriptionEnd.toISOString(), _count: { members: 61, plans: 3, payments: 55 }, users: [{ id: "a3", name: "Marta", email: "admin@zonafuerte.cu", isActive: true }] },
 ];
 const demoSubscriptions: PlatformSubscription[] = [
   { id:"sub-1", plan:"ANNUAL", amount:50000, startedAt:new Date().toISOString(), endsAt:demoSubscriptionEnd.toISOString(), activatedAt:new Date().toISOString(), gym:{ id:"1", name:"Habana Fitness", slug:"habana-fitness" } },
   { id:"sub-2", plan:"MONTHLY", amount:5000, startedAt:new Date().toISOString(), endsAt:demoSubscriptionEnd.toISOString(), activatedAt:new Date().toISOString(), gym:{ id:"2", name:"Titan Gym", slug:"titan-gym" } },
   { id:"sub-3", plan:"TRIAL", amount:0, startedAt:new Date().toISOString(), endsAt:demoSubscriptionEnd.toISOString(), activatedAt:new Date().toISOString(), gym:{ id:"3", name:"Zona Fuerte", slug:"zona-fuerte" } },
 ];
-const demoRequests: SubscriptionRequest[] = [{id:"request-1",code:"GF-8A21F0",plan:"MONTHLY",status:"PENDING",requestedAt:new Date().toISOString(),gym:{id:"2",name:"Titan Gym",phone:"51234567",province:"Villa Clara",users:[{id:"a2",name:"Carlos",email:"admin@titangym.cu",phone:"51234567"}]}}];
+const demoRequests: SubscriptionRequest[] = [{id:"request-1",code:"GF-8A21F0",plan:"MONTHLY",action:"RENEW",fromPlan:"MONTHLY",status:"PENDING",requestedAt:new Date().toISOString(),gym:{id:"2",name:"Titan Gym",phone:"51234567",province:"Villa Clara",users:[{id:"a2",name:"Carlos",email:"admin@titangym.cu",phone:"51234567"}]}}];
 const demoPlans: Plan[] = [
   { id: "p1", name: "Mensual", description: "Acceso completo durante 30 días", price: 1500, durationDays: 30, isActive: true },
   { id: "p2", name: "Trimestral", description: "Acceso completo durante 90 días", price: 4000, durationDays: 90, isActive: true },
@@ -80,6 +86,11 @@ const demoPayments: Payment[] = [
   { id: "pay-2", amount: 4000, paidAmount: 4000, dueDate: new Date().toISOString(), status: "PAID", createdAt: new Date().toISOString(), member: { id: "m-2", firstName: "Luis", lastName: "Gómez", ci: "91020212345" }, membership: { id: "ms-2", plan: demoPlans[1] }, movements: [] },
 ];
 const demoFinances: GymFinances = { totalBilled: 5500, totalCollected: 4500, pendingBalance: 1000, overdueBalance: 0, monthlyRevenue: 4500, pendingPayments: 1, recentMovements: [] };
+const demoStaff: Record<string, StaffAccount[]> = {
+  "1": [{...demoGyms[0].users[0],role:"ADMIN"},{id:"r1",name:"María Elena",email:"recepcion@habanafitness.cu",role:"RECEPTIONIST",isActive:true,createdAt:new Date().toISOString()}],
+  "2": [{...demoGyms[1].users[0],role:"ADMIN"},{id:"r2",name:"José Manuel",email:"recepcion@titangym.cu",role:"RECEPTIONIST",isActive:false,createdAt:new Date().toISOString()}],
+  "3": [{...demoGyms[2].users[0],role:"ADMIN"}],
+};
 
 async function api<T>(path: string, token: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${API}${path}`, {
@@ -175,8 +186,9 @@ export default function Home() {
     if (demo) { setNotice({ message:"Esta acción está desactivada en la demostración", tone:"warning" }); return; }
     if (request.plan === "TRIAL" && status === "APPROVED" && !window.confirm(`Confirma que el mensaje de WhatsApp llegó desde +53 ${request.verificationPhone ?? request.gym.phone ?? "el número registrado"} y que incluía el código ${request.code}.`)) return;
     try {
-      await api(`/platform/subscription-requests/${request.id}`,token,{method:"PATCH",body:JSON.stringify({status})});
-      setNotice({message:status==="APPROVED"?`${request.code} aprobada. El acceso ya está activo.`:`${request.code} fue rechazada.`,tone:status==="APPROVED"?"success":"warning"});
+      const resolved=await api<{gym:{scheduledSubscriptionPlan?:SubscriptionPlan|null;scheduledSubscriptionStartsAt?:string|null}}>(`/platform/subscription-requests/${request.id}`,token,{method:"PATCH",body:JSON.stringify({status})});
+      const scheduled=Boolean(resolved.gym.scheduledSubscriptionPlan);
+      setNotice({message:status==="APPROVED"?(scheduled?`${request.code} aprobada. El cambio comenzará el ${new Date(resolved.gym.scheduledSubscriptionStartsAt!).toLocaleDateString("es-CU")}.`:`${request.code} aprobada. El acceso ya está activo.`):`${request.code} fue rechazada.`,tone:status==="APPROVED"?"success":"warning"});
       await load();
     } catch(error) { setNotice({message:(error as Error).message,tone:"error"}); }
   };
@@ -236,7 +248,7 @@ export default function Home() {
         <div className="panel-title"><div><h2>Gimnasios</h2><p>Selecciona un negocio para editar sus datos, administradores y miembros.</p></div><button className="link-button" onClick={() => void load()}>Actualizar</button></div>
         <div className="table-head"><span>Gimnasio</span><span>Miembros</span><span>Administradores</span><span>Estado</span><span>Gestión</span></div>
         {gyms.map(gym => <div className="table-row" key={gym.id}>
-          <div className="gym-name"><span>{gym.name.slice(0,2).toUpperCase()}</span><div><strong>{gym.name}</strong><small>{gym.province ?? gym.slug} · {!gym.subscriptionPlan ? "Sin suscripción" : subscriptionExpired(gym) ? "Suscripción vencida" : subscriptionPlanLabel(gym.subscriptionPlan,gym.subscriptionTrialDays)}</small></div></div>
+          <div className="gym-name"><span>{gym.name.slice(0,2).toUpperCase()}</span><div><strong>{gym.name}</strong><small>{gym.municipality&&gym.province?`${gym.municipality}, ${gym.province}`:gym.province ?? gym.slug} · {!gym.subscriptionPlan ? "Sin suscripción" : subscriptionExpired(gym) ? "Suscripción vencida" : subscriptionPlanLabel(gym.subscriptionPlan,gym.subscriptionTrialDays)}</small></div></div>
           <strong>{gym._count.members}</strong>
           <div className="admin-cell"><strong>{gym.users[0]?.name ?? "Sin asignar"}</strong><small>{gym.users.length > 1 ? `+${gym.users.length - 1} adicional(es)` : gym.users[0]?.email}</small></div>
           <button className={gym.isActive ? "badge" : "badge trial"} onClick={async()=>{ if(demo)return; await api(`/platform/gyms/${gym.id}/status`,token,{method:"PATCH",body:JSON.stringify({isActive:!gym.isActive})}); await load(); }}>{gym.isActive ? "Activo" : "Inactivo"}</button>
@@ -281,22 +293,25 @@ function Login({ onLogin, onDemo }: { onLogin: (token: string) => void; onDemo: 
 function CreateGym({token,onClose,onCreated}:{token:string;onClose:()=>void;onCreated:()=>void}) {
   const [error,setError]=useState("");
   const [subscriptionPlan,setSubscriptionPlan]=useState<SubscriptionPlan>("TRIAL");
+  const [province,setProvince]=useState("");
+  const [municipality,setMunicipality]=useState("");
   const submit=async(event:FormEvent<HTMLFormElement>)=>{
     event.preventDefault(); const form=new FormData(event.currentTarget);
     try { await api("/platform/gyms",token,{method:"POST",body:JSON.stringify(Object.fromEntries(form))}); onCreated(); }
     catch(reason){setError((reason as Error).message);}
   };
-  return <div className="modal" role="dialog" aria-modal="true" aria-label="Añadir gimnasio"><form className="modal-card" onSubmit={submit}><ModalHead eyebrow="NUEVO CLIENTE" title="Añadir gimnasio" onClose={onClose}/><label>Nombre<input name="name" required/></label><label>Identificador<input name="slug" placeholder="ej. titan-gym" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required/></label><div className="two"><label>Provincia<select name="province" defaultValue=""><option value="">Seleccionar provincia</option>{CUBAN_PROVINCES.map(province=><option key={province} value={province}>{province}</option>)}</select></label><label>Teléfono<input name="phone"/></label></div><div className="two"><label>Moneda del gimnasio<select name="currency" defaultValue="CUP" required><option value="CUP">CUP · Peso cubano</option><option value="USD">USD · Dólar estadounidense</option></select></label><label>Plan de suscripción<select name="subscriptionPlan" value={subscriptionPlan} onChange={event=>setSubscriptionPlan(event.target.value as SubscriptionPlan)} required><option value="TRIAL">Prueba gratuita</option><option value="MONTHLY">Mensual · 1 mes</option><option value="ANNUAL">Anual · 1 año</option></select></label></div>{subscriptionPlan==="TRIAL"&&<label>Días de prueba<input name="subscriptionTrialDays" type="number" min="1" max="365" step="1" defaultValue="7" required/></label>}<div className="two"><label>Administrador<input name="adminName" required/></label><label>Correo<input name="adminEmail" type="email" required/></label></div><label>Contraseña temporal<input name="adminPassword" type="password" minLength={8} required/></label>{error&&<div className="form-error">{error}</div>}<button className="submit">Crear gimnasio y suscripción</button></form></div>;
+  return <div className="modal" role="dialog" aria-modal="true" aria-label="Añadir gimnasio"><form className="modal-card" onSubmit={submit}><ModalHead eyebrow="NUEVO CLIENTE" title="Añadir gimnasio" onClose={onClose}/><label>Nombre<input name="name" required/></label><label>Identificador<input name="slug" placeholder="ej. titan-gym" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required/></label><div className="two"><label>Provincia<select name="province" value={province} onChange={event=>{setProvince(event.target.value);setMunicipality("");}} required><option value="">Seleccionar provincia</option>{CUBAN_PROVINCES.map(item=><option key={item} value={item}>{item}</option>)}</select></label><label>Municipio<select name="municipality" value={municipality} onChange={event=>setMunicipality(event.target.value)} disabled={!province} required><option value="">{province?"Seleccionar municipio":"Selecciona primero la provincia"}</option>{(CUBA_LOCATIONS[province]??[]).map(item=><option key={item} value={item}>{item}</option>)}</select></label></div><label>Teléfono<input name="phone"/></label><div className="two"><label>Moneda del gimnasio<select name="currency" defaultValue="CUP" required><option value="CUP">CUP · Peso cubano</option><option value="USD">USD · Dólar estadounidense</option></select></label><label>Plan de suscripción<select name="subscriptionPlan" value={subscriptionPlan} onChange={event=>setSubscriptionPlan(event.target.value as SubscriptionPlan)} required><option value="TRIAL">Prueba gratuita</option><option value="MONTHLY">Mensual · 1 mes</option><option value="ANNUAL">Anual · 1 año</option></select></label></div>{subscriptionPlan==="TRIAL"&&<label>Días de prueba<input name="subscriptionTrialDays" type="number" min="1" max="365" step="1" defaultValue="7" required/></label>}<div className="two"><label>Administrador<input name="adminName" required/></label><label>Correo<input name="adminEmail" type="email" required/></label></div><label>Contraseña temporal<input name="adminPassword" type="password" minLength={8} required/></label>{error&&<div className="form-error">{error}</div>}<button className="submit">Crear gimnasio y suscripción</button></form></div>;
 }
 
 function ManageGym({ token, gym, demo, onClose, onChanged }: { token: string; gym: Gym; demo: boolean; onClose: () => void; onChanged: () => Promise<void> }) {
   const [detail, setDetail] = useState(gym);
   const [admins, setAdmins] = useState<Admin[]>(gym.users);
+  const [staff, setStaff] = useState<StaffAccount[]>(demo ? demoStaff[gym.id] ?? gym.users.map(admin=>({...admin,role:"ADMIN"})) : []);
   const [plans, setPlans] = useState<Plan[]>(demo ? demoPlans : []);
   const [members, setMembers] = useState<Member[]>([]);
   const [payments, setPayments] = useState<Payment[]>(demo ? demoPayments : []);
   const [finances, setFinances] = useState<GymFinances | null>(demo ? demoFinances : null);
-  const [tab, setTab] = useState<"gym" | "admins" | "plans" | "members" | "payments" | "finances">("gym");
+  const [tab, setTab] = useState<"gym" | "staff" | "admins" | "plans" | "members" | "payments" | "finances">("gym");
   const [editingAdmin, setEditingAdmin] = useState<Admin | null>(null);
   const [editingPlan, setEditingPlan] = useState<Plan | null>(null);
   const [editingMember, setEditingMember] = useState<Member | null>(null);
@@ -319,15 +334,16 @@ function ManageGym({ token, gym, demo, onClose, onChanged }: { token: string; gy
     if (demo) return;
     setLoading(true);
     try {
-      const [nextGym, nextAdmins, nextPlans, nextMembers, nextPayments, nextFinances] = await Promise.all([
+      const [nextGym, nextStaff, nextAdmins, nextPlans, nextMembers, nextPayments, nextFinances] = await Promise.all([
         api<Gym>(`/platform/gyms/${gym.id}`, token),
+        api<StaffAccount[]>(`/platform/gyms/${gym.id}/staff`, token),
         api<Admin[]>(`/platform/gyms/${gym.id}/admins`, token),
         api<Plan[]>(`/platform/gyms/${gym.id}/plans`, token),
         api<Member[]>(`/platform/gyms/${gym.id}/members${memberSearch ? `?search=${encodeURIComponent(memberSearch)}` : ""}`, token),
         api<Payment[]>(`/platform/gyms/${gym.id}/payments`, token),
         api<GymFinances>(`/platform/gyms/${gym.id}/finances`, token),
       ]);
-      setDetail(nextGym); setAdmins(nextAdmins); setPlans(nextPlans); setMembers(nextMembers); setPayments(nextPayments); setFinances(nextFinances);
+      setDetail(nextGym); setStaff(nextStaff); setAdmins(nextAdmins); setPlans(nextPlans); setMembers(nextMembers); setPayments(nextPayments); setFinances(nextFinances);
     } catch (error) { setNotice({ message: (error as Error).message, tone: "error" }); }
     finally { setLoading(false); }
   }, [demo, gym.id, token]);
@@ -364,11 +380,12 @@ function ManageGym({ token, gym, demo, onClose, onChanged }: { token: string; gy
   return <div className="modal" role="dialog" aria-modal="true" aria-label={`Gestionar ${gym.name}`}>
     <section className="modal-card manage-card">
       <ModalHead eyebrow="GESTIÓN DE GIMNASIO" title={detail.name} onClose={onClose}/>
-      <div className="manage-summary"><span>{detail.province || "Provincia sin definir"}</span><span>{detail._count.members} miembros</span><span>{plans.length} planes</span><span>{admins.length} administradores</span><span className={subscriptionExpired(detail) ? "status-dot" : "status-dot active"}>{!detail.subscriptionPlan||!detail.subscriptionEndsAt ? "Sin suscripción" : subscriptionExpired(detail) ? "Suscripción vencida" : `${subscriptionPlanLabel(detail.subscriptionPlan,detail.subscriptionTrialDays)} hasta ${new Date(detail.subscriptionEndsAt).toLocaleDateString("es-CU")}`}</span></div>
+      <div className="manage-summary"><span>{detail.municipality&&detail.province?`${detail.municipality}, ${detail.province}`:detail.province || "Ubicación sin completar"}</span><span>{detail._count.members} miembros</span><span>{plans.length} planes</span><span>{staff.length} cuenta{staff.length===1?"":"s"} de personal</span><span className={subscriptionExpired(detail) ? "status-dot" : "status-dot active"}>{!detail.subscriptionPlan||!detail.subscriptionEndsAt ? "Sin suscripción" : subscriptionExpired(detail) ? "Suscripción vencida" : `${subscriptionPlanLabel(detail.subscriptionPlan,detail.subscriptionTrialDays)} hasta ${new Date(detail.subscriptionEndsAt).toLocaleDateString("es-CU")}`}</span></div>
       {demo && <div className="demo-banner">La demostración es de solo lectura. Inicia sesión para guardar cambios reales.</div>}
       {notice && <NoticeBanner notice={notice} onClose={() => setNotice(null)}/>}
       <div className="manage-tabs" role="tablist">
         <button className={tab === "gym" ? "active" : ""} onClick={() => setTab("gym")}>Información</button>
+        <button className={tab === "staff" ? "active" : ""} onClick={() => setTab("staff")}>Personal <span>{staff.length}</span></button>
         <button className={tab === "admins" ? "active" : ""} onClick={() => setTab("admins")}>Administradores <span>{admins.length}</span></button>
         <button className={tab === "plans" ? "active" : ""} onClick={() => setTab("plans")}>Planes <span>{plans.length}</span></button>
         <button className={tab === "members" ? "active" : ""} onClick={() => setTab("members")}>Miembros <span>{detail._count.members}</span></button>
@@ -377,6 +394,7 @@ function ManageGym({ token, gym, demo, onClose, onChanged }: { token: string; gy
       </div>
       {loading ? <div className="loading-block">Cargando información…</div> : <>
         {tab === "gym" && <><GymEditor gym={detail} disabled={demo} onSave={async payload => { const updated=await api<Gym>(`/platform/gyms/${gym.id}`,token,{method:"PATCH",body:JSON.stringify(payload)}); setDetail({...detail,...updated}); await complete("Información actualizada"); }}/><SubscriptionEditor gym={detail} disabled={demo} onRenew={async (subscriptionPlan,subscriptionTrialDays) => { const updated=await api<Gym>(`/platform/gyms/${gym.id}/subscription`,token,{method:"PATCH",body:JSON.stringify({subscriptionPlan,subscriptionTrialDays})}); setDetail({...detail,...updated}); await complete("Suscripción renovada"); }} onRemove={async()=>{const updated=await api<Gym>(`/platform/gyms/${gym.id}/subscription`,token,{method:"DELETE"});setDetail({...detail,...updated});await complete("Suscripción eliminada");}}/></>}
+        {tab === "staff" && <StaffPanel staff={staff}/>}
         {tab === "admins" && <section className="manager-section">
           <div className="section-tools"><div><h3>Administradores</h3><p>Cuentas con acceso operativo a este gimnasio.</p></div><button disabled={demo} onClick={() => { setAddingAdmin(true); setEditingAdmin(null); }}>+ Añadir</button></div>
           {(addingAdmin || editingAdmin) && <AdminEditor admin={editingAdmin} onCancel={() => { setAddingAdmin(false); setEditingAdmin(null); }} onSave={async payload => { if(editingAdmin) await api(`/platform/gyms/${gym.id}/admins/${editingAdmin.id}`,token,{method:"PATCH",body:JSON.stringify(payload)}); else await api(`/platform/gyms/${gym.id}/admins`,token,{method:"POST",body:JSON.stringify(payload)}); await complete(editingAdmin ? "Administrador actualizado" : "Administrador creado"); }}/>}
@@ -412,6 +430,13 @@ function ManageGym({ token, gym, demo, onClose, onChanged }: { token: string; gy
   </div>;
 }
 
+function StaffPanel({ staff }: { staff: StaffAccount[] }) {
+  const administrators=staff.filter(account=>account.role==="ADMIN");
+  const receptionists=staff.filter(account=>account.role==="RECEPTIONIST");
+  const group=(title:string,description:string,accounts:StaffAccount[])=><section className="staff-group"><div className="section-tools"><div><h3>{title}</h3><p>{description}</p></div><span className="staff-count">{accounts.length}</span></div><div className="entity-list">{accounts.map(account=><article className="entity-row staff-row" key={account.id}><div className={`entity-avatar ${account.role==="ADMIN"?"":"reception"}`}>{initials(account.name)}</div><div><strong>{account.name}</strong><small>{account.email}</small><small>{account.createdAt?`Alta: ${new Date(account.createdAt).toLocaleDateString("es-CU")}`:"Fecha de alta no disponible"}</small></div><span className={account.isActive?"state active":"state"}>{account.isActive?"Activo":"Inactivo"}</span></article>)}{!accounts.length&&<p className="empty-copy">No hay cuentas en este grupo.</p>}</div></section>;
+  return <section className="manager-section staff-panel"><div className="section-tools"><div><h3>Personal y accesos</h3><p>Cuentas asociadas a este gimnasio, separadas por función y estado.</p></div></div><div className="staff-overview"><span><strong>{staff.filter(account=>account.isActive).length}</strong> activas</span><span><strong>{staff.filter(account=>!account.isActive).length}</strong> inactivas</span></div>{group("Administración","Acceso completo a la operación, configuración y personal.",administrators)}{group("Recepción","Acceso a miembros, membresías, cobros, asistencia y consulta de planes.",receptionists)}<section className="staff-group upcoming-role"><div><h3>Entrenadores</h3><p>Sección reservada para cuando se incorpore este rol y sus permisos.</p></div><span>Próximamente</span></section></section>;
+}
+
 function ConfirmDelete({ label, deleting, onCancel, onConfirm }: { label: string; deleting: boolean; onCancel: () => void; onConfirm: () => void }) {
   return <div className="confirm-backdrop" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-copy"><section className="confirm-card"><div className="confirm-icon">!</div><h3 id="delete-title">Eliminar registro</h3><p id="delete-copy">¿Deseas eliminar {label}?</p><div className="confirm-actions"><button disabled={deleting} onClick={onCancel}>Cancelar</button><button className="delete-confirm" disabled={deleting} onClick={onConfirm}>{deleting ? "Eliminando…" : "Eliminar"}</button></div></section></div>;
 }
@@ -422,8 +447,9 @@ function ConfirmSubscriptionRemoval({ gymName, deleting, onCancel, onConfirm }: 
 
 function GymEditor({ gym, disabled, onSave }: { gym: Gym; disabled: boolean; onSave: (payload: Record<string, unknown>) => Promise<void> }) {
   const [error,setError]=useState(""); const [saving,setSaving]=useState(false);
+  const [province,setProvince]=useState(gym.province??""); const [municipality,setMunicipality]=useState(gym.municipality??"");
   const submit=async(event:FormEvent<HTMLFormElement>)=>{event.preventDefault();setSaving(true);setError("");const form=new FormData(event.currentTarget);const payload={...Object.fromEntries(form),isActive:form.get("isActive")==="on"};try{await onSave(payload);}catch(reason){setError((reason as Error).message);}finally{setSaving(false);}};
-  return <form className="editor-form" onSubmit={submit}><div className="form-grid"><label>Nombre<input name="name" defaultValue={gym.name} required disabled={disabled}/></label><label>Identificador<input name="slug" defaultValue={gym.slug} pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required disabled={disabled}/></label><label>Provincia<select name="province" defaultValue={gym.province ?? ""} disabled={disabled}><option value="">Seleccionar provincia</option>{gym.province&&!CUBAN_PROVINCES.includes(gym.province as typeof CUBAN_PROVINCES[number])&&<option value={gym.province}>{gym.province}</option>}{CUBAN_PROVINCES.map(province=><option key={province} value={province}>{province}</option>)}</select></label><label>Teléfono<input name="phone" defaultValue={gym.phone ?? ""} disabled={disabled}/></label><label>Moneda del gimnasio<select name="currency" defaultValue={gym.currency ?? "CUP"} required disabled={disabled}><option value="CUP">CUP · Peso cubano</option><option value="USD">USD · Dólar estadounidense</option></select></label><label className="check-label"><input name="isActive" type="checkbox" defaultChecked={gym.isActive} disabled={disabled}/><span>Gimnasio activo y con acceso habilitado</span></label></div>{error&&<div className="form-error">{error}</div>}<button className="submit compact" disabled={disabled||saving}>{saving?"Guardando…":"Guardar información"}</button></form>;
+  return <form className="editor-form" onSubmit={submit}><div className="form-grid"><label>Nombre<input name="name" defaultValue={gym.name} required disabled={disabled}/></label><label>Identificador<input name="slug" defaultValue={gym.slug} pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required disabled={disabled}/></label><label>Provincia<select name="province" value={province} onChange={event=>{setProvince(event.target.value);setMunicipality("");}} required disabled={disabled}><option value="">Seleccionar provincia</option>{gym.province&&!CUBAN_PROVINCES.includes(gym.province)&&<option value={gym.province}>{gym.province}</option>}{CUBAN_PROVINCES.map(item=><option key={item} value={item}>{item}</option>)}</select></label><label>Municipio<select name="municipality" value={municipality} onChange={event=>setMunicipality(event.target.value)} required disabled={disabled||!province}><option value="">{province?"Seleccionar municipio":"Selecciona primero la provincia"}</option>{municipality&&!(CUBA_LOCATIONS[province]??[]).includes(municipality)&&<option value={municipality}>{municipality}</option>}{(CUBA_LOCATIONS[province]??[]).map(item=><option key={item} value={item}>{item}</option>)}</select></label><label>Teléfono<input name="phone" defaultValue={gym.phone ?? ""} disabled={disabled}/></label><label>Moneda del gimnasio<select name="currency" defaultValue={gym.currency ?? "CUP"} required disabled={disabled}><option value="CUP">CUP · Peso cubano</option><option value="USD">USD · Dólar estadounidense</option></select></label><label className="check-label"><input name="isActive" type="checkbox" defaultChecked={gym.isActive} disabled={disabled}/><span>Gimnasio activo y con acceso habilitado</span></label></div>{error&&<div className="form-error">{error}</div>}<button className="submit compact" disabled={disabled||saving}>{saving?"Guardando…":"Guardar información"}</button></form>;
 }
 
 function SubscriptionEditor({ gym, disabled, onRenew, onRemove }: { gym: Gym; disabled: boolean; onRenew: (plan: SubscriptionPlan, trialDays?: number) => Promise<void>; onRemove:()=>Promise<void> }) {

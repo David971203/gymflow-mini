@@ -19,6 +19,7 @@ import { PrismaService } from './prisma.service';
 import { SyncController } from './sync.controller';
 import { SyncService } from './sync.service';
 import { SubscriptionExpirationService } from './subscription-expiration.service';
+import { SubscriptionScheduleService } from './subscription-schedule.service';
 
 @Module({
   imports: [
@@ -27,6 +28,6 @@ import { SubscriptionExpirationService } from './subscription-expiration.service
     JwtModule.registerAsync({ inject: [ConfigService], useFactory: (config: ConfigService) => ({ secret: config.getOrThrow('JWT_SECRET'), signOptions: { expiresIn: '12h' } }) }),
   ],
   controllers: [HealthController, AuthController, PlatformController, AdminController, AttendanceController, SyncController],
-  providers: [PrismaService, AuthService, GoogleIdentityService, MailService, MiniService, AttendanceService, MembershipExpirationService, SubscriptionExpirationService, SyncService, JwtStrategy, { provide: APP_GUARD, useClass: JwtGuard }, { provide: APP_GUARD, useClass: RolesGuard }, { provide: APP_GUARD, useClass: GymSubscriptionGuard }],
+  providers: [PrismaService, AuthService, GoogleIdentityService, MailService, MiniService, AttendanceService, MembershipExpirationService, SubscriptionExpirationService, SubscriptionScheduleService, SyncService, JwtStrategy, { provide: APP_GUARD, useClass: JwtGuard }, { provide: APP_GUARD, useClass: RolesGuard }, { provide: APP_GUARD, useClass: GymSubscriptionGuard }],
 })
 export class AppModule {}

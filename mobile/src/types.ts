@@ -1,9 +1,10 @@
-export type Tab = 'INICIO' | 'MIEMBROS' | 'ASISTENCIA' | 'PLANES' | 'CAJA' | 'ESTADISTICAS' | 'CUENTA';
+export type Tab = 'INICIO' | 'MIEMBROS' | 'ASISTENCIA' | 'PLANES' | 'CAJA' | 'ESTADISTICAS' | 'PERSONAL' | 'CUENTA';
 export type Currency = 'CUP' | 'USD';
 export type GymSubscriptionPlan = 'TRIAL' | 'MONTHLY' | 'ANNUAL';
+export type SubscriptionRequestAction = 'ACTIVATE' | 'RENEW' | 'CHANGE';
 export type StaffRole = 'ADMIN' | 'RECEPTIONIST';
-export type SubscriptionRequest = { id: string; code: string; plan: GymSubscriptionPlan; status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED'; requestedAt: string; resolvedAt?: string | null };
-export type User = { id: string; email: string; phone?: string | null; phoneVerifiedAt?: string | null; name: string; role: StaffRole; gymId: string; gym: { name: string; currency: Currency; subscriptionPlan: GymSubscriptionPlan | null; subscriptionTrialDays: number; subscriptionStartedAt: string | null; subscriptionEndsAt: string | null }; subscriptionRequest?: SubscriptionRequest | null; latestSubscriptionRequest?: SubscriptionRequest | null };
+export type SubscriptionRequest = { id: string; code: string; plan: GymSubscriptionPlan; action: SubscriptionRequestAction; fromPlan?: GymSubscriptionPlan | null; status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED'; requestedAt: string; resolvedAt?: string | null };
+export type User = { id: string; email: string; phone?: string | null; phoneVerifiedAt?: string | null; name: string; role: StaffRole; gymId: string; gym: { name: string; province?: string | null; municipality?: string | null; currency: Currency; subscriptionPlan: GymSubscriptionPlan | null; subscriptionTrialDays: number; subscriptionStartedAt: string | null; subscriptionEndsAt: string | null; scheduledSubscriptionPlan?: GymSubscriptionPlan | null; scheduledSubscriptionStartsAt?: string | null; scheduledSubscriptionEndsAt?: string | null }; subscriptionRequest?: SubscriptionRequest | null; latestSubscriptionRequest?: SubscriptionRequest | null };
 export type StaffAccount = { id: string; email: string; name: string; role: StaffRole; isActive: boolean; createdAt: string };
 export type Dashboard = { members: number; activeMemberships: number; monthlyRevenue: number; pendingDebt: number; recentPayments: Movement[] };
 export type Plan = { id: string; name: string; description?: string; price: string; durationDays: number; isActive: boolean };

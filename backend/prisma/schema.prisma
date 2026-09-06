@@ -26,6 +26,12 @@ enum SubscriptionRequestStatus {
   CANCELLED
 }
 
+enum SubscriptionRequestAction {
+  ACTIVATE
+  RENEW
+  CHANGE
+}
+
 enum MemberStatus {
   ACTIVE
   INACTIVE
@@ -58,21 +64,25 @@ enum AttendanceMethod {
 }
 
 model Gym {
-  id                         String               @id @default(uuid())
-  name                       String
-  slug                       String               @unique
-  province                   String?
-  phone                      String?
-  currency                   String               @default("CUP")
-  isActive                   Boolean              @default(true)
-  subscriptionPlan           GymSubscriptionPlan?
-  subscriptionTrialDays      Int                  @default(7)
-  subscriptionStartedAt      DateTime?
-  subscriptionEndsAt         DateTime?
-  subscriptionWarningSentFor DateTime?
-  subscriptionExpiredSentFor DateTime?
-  createdAt                  DateTime             @default(now())
-  updatedAt                  DateTime             @updatedAt
+  id                            String               @id @default(uuid())
+  name                          String
+  slug                          String               @unique
+  province                      String?
+  municipality                  String?
+  phone                         String?
+  currency                      String               @default("CUP")
+  isActive                      Boolean              @default(true)
+  subscriptionPlan              GymSubscriptionPlan?
+  subscriptionTrialDays         Int                  @default(7)
+  subscriptionStartedAt         DateTime?
+  subscriptionEndsAt            DateTime?
+  subscriptionWarningSentFor    DateTime?
+  subscriptionExpiredSentFor    DateTime?
+  scheduledSubscriptionPlan     GymSubscriptionPlan?
+  scheduledSubscriptionStartsAt DateTime?
+  scheduledSubscriptionEndsAt   DateTime?
+  createdAt                     DateTime             @default(now())
+  updatedAt                     DateTime             @updatedAt
 
   users                 User[]
   members               Member[]
@@ -91,6 +101,9 @@ model SubscriptionRequest {
   gymId             String
   gym               Gym                       @relation(fields: [gymId], references: [id], onDelete: Cascade)
   plan              GymSubscriptionPlan
+  action            SubscriptionRequestAction @default(ACTIVATE)
+  fromPlan          GymSubscriptionPlan?
+  previousEndsAt    DateTime?
   status            SubscriptionRequestStatus @default(PENDING)
   requestedAt       DateTime                  @default(now())
   resolvedAt        DateTime?

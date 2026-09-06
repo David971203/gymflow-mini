@@ -24,6 +24,7 @@ export class PlatformController {
   @Patch('gyms/:id/subscription') subscription(@Param('id') id: string, @Body() dto: UpdateGymSubscriptionDto) { return this.mini.renewGymSubscription(id, dto.subscriptionPlan, dto.subscriptionTrialDays); }
   @Delete('gyms/:id/subscription') removeSubscription(@Param('id') id: string) { return this.mini.removeGymSubscription(id); }
   @Get('gyms/:gymId/admins') admins(@Param('gymId') gymId: string) { return this.mini.listGymAdmins(gymId); }
+  @Get('gyms/:gymId/staff') staff(@Param('gymId') gymId: string) { return this.mini.listGymStaff(gymId); }
   @Post('gyms/:gymId/admins') createAdmin(@Param('gymId') gymId: string, @Body() dto: CreateGymAdminDto) { return this.mini.createGymAdmin(gymId, dto); }
   @Patch('gyms/:gymId/admins/:id') updateAdmin(@Param('gymId') gymId: string, @Param('id') id: string, @Body() dto: UpdateGymAdminDto) { return this.mini.updateGymAdmin(gymId, id, dto); }
   @Delete('gyms/:gymId/admins/:id') deleteAdmin(@Param('gymId') gymId: string, @Param('id') id: string) { return this.mini.deleteGymAdmin(gymId, id); }

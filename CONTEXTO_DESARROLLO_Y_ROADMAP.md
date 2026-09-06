@@ -22,7 +22,7 @@ No comparte API, base de datos, sesiones ni despliegue con el GymFlow completo. 
 - Rama actual: `desarrollo`.
 - Remoto: `https://github.com/David971203/gymflow-mini.git`.
 - Último commit observado: `65ba6e9 feat: add receptionist staff accounts and permissions` (2026-09-02).
-- Hay **un cambio local sin commit** en `mobile/App.tsx`: el pie de Cuenta cambió de “PILOTO CUBA” a “© 2026 GYMFLOW MINI · TODOS LOS DERECHOS RESERVADOS”. No sobrescribirlo ni descartarlo accidentalmente.
+- El pie de Cuenta muestra “© 2026 GYMFLOW MINI · TODOS LOS DERECHOS RESERVADOS”.
 - Producción usa `main`; desarrollo usa `desarrollo`.
 
 Verificación realizada durante esta auditoría:
@@ -58,7 +58,7 @@ Los fallos web observados son de red durante la descarga de fuentes mediante `ne
 - Planes de plataforma `TRIAL`, `MONTHLY` y `ANNUAL`.
 - Solicitudes de pago P2P para plan mensual o anual, con código único y contacto por WhatsApp.
 - El superadministrador puede aprobar o rechazar solicitudes y activar/renovar/quitar suscripciones.
-- Una renovación vigente se extiende desde su vencimiento; una vencida comienza desde el momento de aprobación.
+- Renovar el mismo plan y cambiar de anual a mensual se habilita durante los últimos 3 días. El nuevo período comienza el día posterior al vencimiento; si ya venció, comienza al aprobar. El cambio mensual a anual se aplica inmediatamente al aprobarlo.
 - El backend permite lecturas cuando una suscripción venció, pero bloquea escrituras. Un gimnasio nuevo sin oferta elegida queda bloqueado hasta elegir prueba o plan.
 - El móvil conserva operación offline un máximo de 72 horas desde la última validación confiable del servidor; SecureStore puede conservar la sesión hasta 14 días, sin ampliar ese permiso operativo.
 
@@ -372,3 +372,9 @@ Durante cuatro a seis semanas con tres a cinco gimnasios, registrar:
 - disposición a pagar y precio aceptable.
 
 La señal principal es la retención operativa: que administración y recepción sigan usando miembros, caja y asistencia después de la primera semana. El roadmap debe responder a fricciones repetidas de usuarios reales, no solo a una lista amplia de funciones solicitadas.
+
+### Personal y acceso: navegación móvil
+
+- Entrada Personal y acceso dentro de Cuenta, exclusiva de administradores; abre una pantalla propia con regreso a Cuenta. No aparece en la barra de pestañas.
+- Navegación interna por Recepción, Administración y Entrenadores. Recepción permite crear, editar, desactivar y eliminar cuentas con los permisos existentes; Administración conserva la solicitud por WhatsApp a soporte.
+- Entrenadores muestra Próximamente: su sección de interfaz está reservada, pero no se ha creado un rol autenticable ni se han concedido permisos. Su incorporación requerirá modelo, API y permisos propios.

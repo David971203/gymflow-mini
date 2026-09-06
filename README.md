@@ -25,6 +25,7 @@ Incluye:
 - Prueba gratuita de 7 días con verificación manual del teléfono por WhatsApp y aprobación desde el panel. Se concede una sola vez por teléfono y dispositivo.
 - Protección de solicitudes de prueba: espera de 60 segundos, hasta 5 envíos por teléfono/dispositivo y 20 por IP cada 24 horas.
 - Solicitudes de planes mensual y anual con código P2P, contacto por WhatsApp y aprobación desde el panel.
+- Las renovaciones y el cambio anual → mensual se habilitan durante los últimos 3 días; el nuevo período comienza el día posterior al vencimiento. El cambio mensual → anual puede aprobarse inmediatamente desde cualquier fecha.
 - Recuperación de contraseña mediante código de 6 dígitos enviado por Gmail y cambio seguro desde Cuenta.
 
 - Registro y edición básica de miembros con carnet de identidad cubano (CI) obligatorio.

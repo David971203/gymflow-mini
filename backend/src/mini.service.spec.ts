@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
-import { GymSubscriptionPlan, MembershipStatus, PaymentStatus, Prisma, UserRole } from '@prisma/client';
+import { GymSubscriptionPlan, MembershipStatus, PaymentStatus, Prisma, SubscriptionRequestAction, UserRole } from '@prisma/client';
 import { MiniService } from './mini.service';
 
 describe('MiniService', () => {
@@ -91,10 +91,10 @@ describe('MiniService', () => {
 
   it('permite al superadministrador actualizar todos los datos del gimnasio', async () => {
     const update = jest.fn().mockResolvedValue({ id: 'gym-1', name: 'Titan Centro', slug: 'titan-centro', currency: 'CUP' });
-    const prisma = { gym: { findUnique: jest.fn().mockResolvedValue({ id: 'gym-1' }), update } };
+    const prisma = { gym: { findUnique: jest.fn().mockResolvedValue({ id: 'gym-1', province:'La Habana', municipality:'Plaza' }), update } };
     const service = new MiniService(prisma as never);
     await service.updateGym('gym-1', { name: 'Titan Centro', slug: 'titan-centro', currency: 'CUP' });
-    expect(update).toHaveBeenCalledWith({ where: { id: 'gym-1' }, data: { name: 'Titan Centro', slug: 'titan-centro', currency: 'CUP' } });
+    expect(update).toHaveBeenCalledWith({ where: { id: 'gym-1' }, data: { name: 'Titan Centro', slug: 'titan-centro', currency: 'CUP', province:'La Habana', municipality:'Plaza' } });
   });
 
   it('asigna el gimnasio de la ruta al crear un miembro desde plataforma', async () => {
@@ -111,12 +111,28 @@ describe('MiniService', () => {
     await expect(service.updateGymAdmin('gym-1', 'admin-other', { name: 'Otro' })).rejects.toBeInstanceOf(NotFoundException);
   });
 
+  it('rechaza un municipio que no pertenece a la provincia del gimnasio', async () => {
+    const service = new MiniService({ gym:{ findUnique:jest.fn().mockResolvedValue({ id:'gym-1', province:'La Habana', municipality:'Plaza' }) } } as never);
+    await expect(service.updateGym('gym-1',{ municipality:'Viñales' })).rejects.toBeInstanceOf(BadRequestException);
+  });
+
   it('lista solamente las cuentas de personal del gimnasio autenticado', async () => {
     const findMany = jest.fn().mockResolvedValue([]);
     const service = new MiniService({ user:{ findMany } } as never);
     await service.listStaff(user);
     expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
       where:{ gymId:'gym-1', role:{ in:['ADMIN','RECEPTIONIST'] } },
+    }));
+  });
+
+  it('permite a plataforma consultar administradores y recepcionistas de un gimnasio', async () => {
+    const findMany = jest.fn().mockResolvedValue([]);
+    const prisma = { gym:{ findUnique:jest.fn().mockResolvedValue({ id:'gym-2' }) }, user:{ findMany } };
+    const service = new MiniService(prisma as never);
+    await service.listGymStaff('gym-2');
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where:{ gymId:'gym-2', role:{ in:['ADMIN','RECEPTIONIST'] } },
+      select:expect.objectContaining({ role:true }),
     }));
   });
 
@@ -465,6 +481,50 @@ describe('MiniService', () => {
     expect(createSubscription).toHaveBeenCalledWith({data:expect.objectContaining({gymId:'gym-1',plan:GymSubscriptionPlan.TRIAL,amount:0})});
   });
 
+  it('programa el cambio anual a mensual para el día posterior al vencimiento', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-04T16:00:00.000Z'));
+    const previousEndsAt = new Date('2026-09-06T15:00:00.000Z');
+    const request = {id:'request-1',gymId:'gym-1',plan:GymSubscriptionPlan.MONTHLY,action:SubscriptionRequestAction.CHANGE,fromPlan:GymSubscriptionPlan.ANNUAL,previousEndsAt,status:'PENDING',gym:{subscriptionPlan:GymSubscriptionPlan.ANNUAL,subscriptionEndsAt:previousEndsAt,subscriptionTrialDays:7}};
+    const updateGym = jest.fn();
+    const createSubscription = jest.fn();
+    const service = new MiniService({
+      subscriptionRequest:{findUnique:jest.fn().mockResolvedValue(request)},
+      $transaction:jest.fn(async(callback:(tx:unknown)=>unknown)=>callback({
+        subscriptionRequest:{updateMany:jest.fn().mockResolvedValue({count:1}),findUniqueOrThrow:jest.fn().mockResolvedValue({...request,status:'APPROVED'})},
+        gym:{update:updateGym},platformSubscription:{create:createSubscription},
+      })),
+    } as never);
+    try {
+      await service.resolveSubscriptionRequest('request-1','APPROVED');
+      expect(updateGym).toHaveBeenCalledWith({where:{id:'gym-1'},data:{scheduledSubscriptionPlan:GymSubscriptionPlan.MONTHLY,scheduledSubscriptionStartsAt:new Date('2026-09-07T04:00:00.000Z'),scheduledSubscriptionEndsAt:new Date('2026-10-07T04:00:00.000Z')}});
+      expect(createSubscription).toHaveBeenCalledWith({data:expect.objectContaining({startedAt:new Date('2026-09-07T04:00:00.000Z'),endsAt:new Date('2026-10-07T04:00:00.000Z')})});
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('aplica el cambio mensual a anual desde el día de aprobación', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-01T16:00:00.000Z'));
+    const previousEndsAt = new Date('2026-09-20T15:00:00.000Z');
+    const request = {id:'request-1',gymId:'gym-1',plan:GymSubscriptionPlan.ANNUAL,action:SubscriptionRequestAction.CHANGE,fromPlan:GymSubscriptionPlan.MONTHLY,previousEndsAt,status:'PENDING',gym:{subscriptionPlan:GymSubscriptionPlan.MONTHLY,subscriptionEndsAt:previousEndsAt,subscriptionTrialDays:7}};
+    const updateGym = jest.fn();
+    const service = new MiniService({subscriptionRequest:{findUnique:jest.fn().mockResolvedValue(request)},$transaction:jest.fn(async(callback:(tx:unknown)=>unknown)=>callback({subscriptionRequest:{updateMany:jest.fn().mockResolvedValue({count:1}),findUniqueOrThrow:jest.fn().mockResolvedValue({...request,status:'APPROVED'})},gym:{update:updateGym},platformSubscription:{create:jest.fn()}}))} as never);
+    try {
+      await service.resolveSubscriptionRequest('request-1','APPROVED');
+      expect(updateGym).toHaveBeenCalledWith({where:{id:'gym-1'},data:expect.objectContaining({subscriptionPlan:GymSubscriptionPlan.ANNUAL,subscriptionStartedAt:new Date('2026-09-01T16:00:00.000Z'),subscriptionEndsAt:new Date('2027-09-01T16:00:00.000Z')})});
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('extiende una renovación desde el día posterior al vencimiento', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-04T16:00:00.000Z'));
+    const previousEndsAt = new Date('2026-09-06T15:00:00.000Z');
+    const request = {id:'request-1',gymId:'gym-1',plan:GymSubscriptionPlan.MONTHLY,action:SubscriptionRequestAction.RENEW,fromPlan:GymSubscriptionPlan.MONTHLY,previousEndsAt,status:'PENDING',gym:{subscriptionPlan:GymSubscriptionPlan.MONTHLY,subscriptionEndsAt:previousEndsAt,subscriptionTrialDays:7}};
+    const updateGym = jest.fn();
+    const service = new MiniService({subscriptionRequest:{findUnique:jest.fn().mockResolvedValue(request)},$transaction:jest.fn(async(callback:(tx:unknown)=>unknown)=>callback({subscriptionRequest:{updateMany:jest.fn().mockResolvedValue({count:1}),findUniqueOrThrow:jest.fn().mockResolvedValue({...request,status:'APPROVED'})},gym:{update:updateGym},platformSubscription:{create:jest.fn()}}))} as never);
+    try {
+      await service.resolveSubscriptionRequest('request-1','APPROVED');
+      expect(updateGym).toHaveBeenCalledWith({where:{id:'gym-1'},data:{subscriptionEndsAt:new Date('2026-10-07T04:00:00.000Z'),subscriptionWarningSentFor:null,subscriptionExpiredSentFor:null}});
+    } finally { jest.useRealTimers(); }
+  });
+
   it('renueva desde hoy una suscripción vencida', async () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-08-27T12:00:00.000Z'));
     try {
@@ -473,7 +533,7 @@ describe('MiniService', () => {
       const transaction = jest.fn().mockImplementation(async callback => callback({ gym:{ update }, platformSubscription:{ create } }));
       const service = new MiniService({ gym: { findUnique: jest.fn().mockResolvedValue({ id:'gym-1', subscriptionTrialDays:7, subscriptionEndsAt:new Date('2026-08-20T12:00:00.000Z') }) }, $transaction:transaction } as never);
       await service.renewGymSubscription('gym-1',GymSubscriptionPlan.MONTHLY);
-      expect(update).toHaveBeenCalledWith({ where:{ id:'gym-1' }, data:{ subscriptionPlan:GymSubscriptionPlan.MONTHLY, subscriptionTrialDays:7, subscriptionStartedAt:new Date('2026-08-27T12:00:00.000Z'), subscriptionEndsAt:new Date('2026-09-27T12:00:00.000Z') } });
+      expect(update).toHaveBeenCalledWith({ where:{ id:'gym-1' }, data:expect.objectContaining({ subscriptionPlan:GymSubscriptionPlan.MONTHLY, subscriptionTrialDays:7, subscriptionStartedAt:new Date('2026-08-27T12:00:00.000Z'), subscriptionEndsAt:new Date('2026-09-27T12:00:00.000Z') }) });
       expect(create).toHaveBeenCalledWith({ data:{ gymId:'gym-1', plan:GymSubscriptionPlan.MONTHLY, amount:5000, startedAt:new Date('2026-08-27T12:00:00.000Z'), endsAt:new Date('2026-09-27T12:00:00.000Z') } });
     } finally { jest.useRealTimers(); }
   });
@@ -500,7 +560,7 @@ describe('MiniService', () => {
       const transaction = jest.fn().mockImplementation(async callback => callback({ gym:{ update }, platformSubscription:{ create } }));
       const service = new MiniService({ gym: { findUnique: jest.fn().mockResolvedValue({ id:'gym-1', subscriptionTrialDays:7, subscriptionEndsAt:new Date('2026-08-20T12:00:00.000Z') }) }, $transaction:transaction } as never);
       await service.renewGymSubscription('gym-1',GymSubscriptionPlan.TRIAL,14);
-      expect(update).toHaveBeenCalledWith({ where:{ id:'gym-1' }, data:{ subscriptionPlan:GymSubscriptionPlan.TRIAL, subscriptionTrialDays:14, subscriptionStartedAt:new Date('2026-08-27T12:00:00.000Z'), subscriptionEndsAt:new Date('2026-09-10T12:00:00.000Z') } });
+      expect(update).toHaveBeenCalledWith({ where:{ id:'gym-1' }, data:expect.objectContaining({ subscriptionPlan:GymSubscriptionPlan.TRIAL, subscriptionTrialDays:14, subscriptionStartedAt:new Date('2026-08-27T12:00:00.000Z'), subscriptionEndsAt:new Date('2026-09-10T12:00:00.000Z') }) });
       expect(create.mock.calls[0][0].data.amount).toBe(0);
     } finally { jest.useRealTimers(); }
   });
@@ -509,7 +569,7 @@ describe('MiniService', () => {
     const update = jest.fn().mockResolvedValue({ id:'gym-1', subscriptionPlan:null, subscriptionStartedAt:null, subscriptionEndsAt:null });
     const service = new MiniService({ gym:{ findUnique:jest.fn().mockResolvedValue({ id:'gym-1' }), update } } as never);
     await expect(service.removeGymSubscription('gym-1')).resolves.toMatchObject({ subscriptionPlan:null, subscriptionEndsAt:null });
-    expect(update).toHaveBeenCalledWith({ where:{ id:'gym-1' }, data:{ subscriptionPlan:null, subscriptionStartedAt:null, subscriptionEndsAt:null } });
+    expect(update).toHaveBeenCalledWith({ where:{ id:'gym-1' }, data:expect.objectContaining({ subscriptionPlan:null, subscriptionStartedAt:null, subscriptionEndsAt:null }) });
   });
 
   it('guarda una foto JPEG comprimida en el miembro autenticado', async () => {

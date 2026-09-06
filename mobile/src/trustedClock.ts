@@ -1,7 +1,7 @@
 import * as SecureStore from 'expo-secure-store';
 
 export const OFFLINE_SUBSCRIPTION_GRACE_MS = 72 * 60 * 60 * 1000;
-export const SUBSCRIPTION_VALIDATION_MESSAGE = 'Conéctate a Internet para verificar la membresía de tu gimnasio.';
+export const SUBSCRIPTION_VALIDATION_MESSAGE = 'Conéctate a Internet para verificar la suscripción de tu gimnasio.';
 
 const CLOCK_ROLLBACK_TOLERANCE_MS = 5 * 60 * 1000;
 const STORAGE_PREFIX = 'gymflow_mini_trusted_clock_';

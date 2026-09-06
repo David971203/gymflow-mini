@@ -25,6 +25,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:-local-mini-secret-change-before-deploy}
       PORT: 3100
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-0}
       SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
       SMTP_PORT: ${SMTP_PORT:-465}
       SMTP_SECURE: ${SMTP_SECURE:-true}

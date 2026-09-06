@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post } from '@nestjs/common';
+import { Body, Controller, Get, Ip, Post } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { ChangePasswordDto, ForgotPasswordDto, GoogleLoginDto, LoginDto, RegisterDto, ResendEmailVerificationDto, ResetPasswordDto, SelectSubscriptionDto, VerifyEmailDto } from './auth.dto';
@@ -20,5 +20,5 @@ export class AuthController {
   @Post('password/change') @Roles(UserRole.ADMIN, UserRole.RECEPTIONIST) @AllowWithoutSubscription()
   changePassword(@CurrentUser() user: AuthUser, @Body() dto: ChangePasswordDto) { return this.auth.changePassword(user, dto); }
   @Post('subscription') @Roles(UserRole.ADMIN) @AllowWithoutSubscription()
-  selectSubscription(@CurrentUser() user: AuthUser, @Body() dto: SelectSubscriptionDto) { return this.auth.selectSubscription(user, dto); }
+  selectSubscription(@CurrentUser() user: AuthUser, @Body() dto: SelectSubscriptionDto, @Ip() ip: string) { return this.auth.selectSubscription(user, dto, ip); }
 }

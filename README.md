@@ -22,7 +22,8 @@ Incluye:
 
 - Autorregistro del dueño desde Android con creación de su gimnasio y cuenta administrativa.
 - Verificación obligatoria del correo en producción mediante código de 6 dígitos; desarrollo puede omitirla mediante configuración del backend.
-- Prueba gratuita automática de 7 días, única por teléfono móvil y dispositivo Android.
+- Prueba gratuita de 7 días con verificación manual del teléfono por WhatsApp y aprobación desde el panel. Se concede una sola vez por teléfono y dispositivo.
+- Protección de solicitudes de prueba: espera de 60 segundos, hasta 5 envíos por teléfono/dispositivo y 20 por IP cada 24 horas.
 - Solicitudes de planes mensual y anual con código P2P, contacto por WhatsApp y aprobación desde el panel.
 - Recuperación de contraseña mediante código de 6 dígitos enviado por Gmail y cambio seguro desde Cuenta.
 
@@ -63,7 +64,7 @@ Gym 1--N SyncReceipt N--1 User(ADMIN)
 
 ## Motor offline de Android
 
-La app Android es **local-first**. Después de un primer login con conexión, el administrador puede consultar y modificar miembros, planes, membresías y cobros sin Internet durante un máximo de **72 horas desde la última validación online**. Al vencer ese plazo se bloquean las acciones hasta recuperar conexión y verificar la membresía. La sesión cifrada puede conservarse en SecureStore hasta 14 días para recuperar la cuenta y sus datos locales, pero ese plazo no amplía el permiso de operar offline.
+La app Android es **local-first**. Después de un primer login con conexión, el administrador puede consultar y modificar miembros, planes, membresías y cobros sin Internet durante un máximo de **72 horas desde la última validación online**. Al vencer ese plazo se bloquean las acciones hasta recuperar conexión y verificar la suscripción. La suscripción permanece operativa durante todo el día indicado como fecha de vencimiento en `America/Havana`; el modo de solo consulta comienza al iniciar el día siguiente. La sesión cifrada puede conservarse en SecureStore hasta 14 días para recuperar la cuenta y sus datos locales, pero ese plazo no amplía el permiso de operar offline.
 
 ### Flujo de datos
 
@@ -143,6 +144,7 @@ Variables necesarias en Production y Preview:
 - `DATABASE_URL`: PostgreSQL accesible desde Internet y preferiblemente con pool de conexiones.
 - `JWT_SECRET`: secreto largo y diferente al valor de ejemplo.
 - `CORS_ORIGIN`: origen público del panel web; durante una prueba controlada puede ser `*`.
+- `TRUST_PROXY_HOPS`: cantidad de proxies confiables delante del backend para obtener la IP real. En los servicios web de Render usa `1`; localmente se deja en `0`.
 
 Antes del primer despliegue aplica las migraciones contra la base de producción desde un entorno seguro:
 

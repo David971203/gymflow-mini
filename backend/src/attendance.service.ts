@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { AttendanceMethod, MembershipStatus, Prisma } from '@prisma/client';
 import type { AuthUser } from './common';
 import { AttendanceQueryDto, CheckInAttendanceDto, CheckOutAttendanceDto } from './attendance.dto';
+import { nextMembershipDayStart } from './membership-time';
 import { PrismaService } from './prisma.service';
 
 const attendanceInclude = {
@@ -65,7 +66,7 @@ export class AttendanceService {
       throw new BadRequestException('La hora de entrada no está dentro del rango offline permitido');
     }
     const membership = await this.prisma.membership.findFirst({
-      where: { memberId: member.id, status: MembershipStatus.ACTIVE, startDate: { lte: checkInAt }, endDate: { gte: checkInAt } },
+      where: { memberId: member.id, status: MembershipStatus.ACTIVE, startDate: { lt: nextMembershipDayStart(checkInAt) }, endDate: { gte: nextMembershipDayStart(checkInAt) } },
     });
     if (!membership) throw new BadRequestException('El miembro no tiene una membresía vigente');
     const open = await this.prisma.attendance.findFirst({ where: { gymId, memberId: member.id, checkOutAt: null } });

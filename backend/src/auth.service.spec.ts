@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
-import { GymSubscriptionPlan, Prisma, UserRole } from '@prisma/client';
+import { GymSubscriptionPlan, UserRole } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { createHmac } from 'crypto';
 import { AuthService } from './auth.service';
@@ -145,21 +145,56 @@ describe('AuthService self-service security', () => {
   });
 
   it('rechaza la prueba cuando el teléfono o dispositivo ya fue utilizado', async () => {
-    const duplicate = new Prisma.PrismaClientKnownRequestError('duplicate trial claim',{code:'P2002',clientVersion:'5.22.0'});
     const prisma = {
       user:{ findUnique:jest.fn().mockResolvedValue({phone:'51234567'}) },
-      $transaction:jest.fn(async (callback:(tx:unknown)=>unknown)=>callback({
-        gym:{findUniqueOrThrow:jest.fn().mockResolvedValue({subscriptionPlan:null})},
-        trialClaim:{create:jest.fn().mockRejectedValue(duplicate)},
-        subscriptionRequest:{updateMany:jest.fn()},
-        platformSubscription:{create:jest.fn()},
-      })),
+      trialClaim:{findFirst:jest.fn().mockResolvedValue({id:'claim-1'})},
     };
     const service = new AuthService(prisma as never,{ signAsync:jest.fn() } as never,{ sendPasswordResetCode:jest.fn() } as never);
 
     await expect(service.selectSubscription(authUser,{plan:GymSubscriptionPlan.TRIAL,deviceId:'android:1234567890abcdef'})).rejects.toEqual(
       new ConflictException('La prueba gratuita ya fue utilizada con este teléfono o dispositivo'),
     );
+  });
+
+  it('crea una solicitud de verificación por WhatsApp sin activar todavía la prueba', async () => {
+    const request = {id:'request-1',code:'GF-T-ABC123',gymId:'gym-1',plan:GymSubscriptionPlan.TRIAL,status:'PENDING',requestedAt:new Date(),lastRequestedAt:new Date(),resendCount:0};
+    const prisma = {
+      user:{findUnique:jest.fn().mockResolvedValue({phone:'51234567'})},
+      trialClaim:{findFirst:jest.fn().mockResolvedValue(null)},
+      subscriptionRequest:{findFirst:jest.fn().mockResolvedValue(null),count:jest.fn().mockResolvedValue(0)},
+      $transaction:jest.fn(async(callback:(tx:unknown)=>unknown)=>callback({
+        gym:{findUniqueOrThrow:jest.fn().mockResolvedValue({subscriptionPlan:null})},
+        subscriptionRequest:{updateMany:jest.fn(),create:jest.fn().mockResolvedValue(request)},
+      })),
+    };
+    const service = new AuthService(prisma as never,{signAsync:jest.fn()} as never,{} as never);
+    jest.spyOn(service as never,'profile').mockResolvedValue({subscriptionRequest:request} as never);
+
+    await expect(service.selectSubscription(authUser,{plan:GymSubscriptionPlan.TRIAL,deviceId:'android:1234567890abcdef'},'192.0.2.10')).resolves.toMatchObject({request:{plan:GymSubscriptionPlan.TRIAL,status:'PENDING'}});
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('limita el reenvío inmediato de una solicitud de prueba pendiente', async () => {
+    const pending = {id:'request-1',requestedAt:new Date(),lastRequestedAt:new Date(),resendCount:0};
+    const prisma = {
+      user:{findUnique:jest.fn().mockResolvedValue({phone:'51234567'})},
+      trialClaim:{findFirst:jest.fn().mockResolvedValue(null)},
+      subscriptionRequest:{findFirst:jest.fn().mockResolvedValue(pending)},
+    };
+    const service = new AuthService(prisma as never,{signAsync:jest.fn()} as never,{} as never);
+
+    await expect(service.selectSubscription(authUser,{plan:GymSubscriptionPlan.TRIAL,deviceId:'android:1234567890abcdef'},'192.0.2.10')).rejects.toMatchObject({status:429});
+  });
+
+  it('limita a cinco solicitudes diarias por teléfono o dispositivo', async () => {
+    const prisma = {
+      user:{findUnique:jest.fn().mockResolvedValue({phone:'51234567'})},
+      trialClaim:{findFirst:jest.fn().mockResolvedValue(null)},
+      subscriptionRequest:{findFirst:jest.fn().mockResolvedValue(null),count:jest.fn().mockResolvedValue(5)},
+    };
+    const service = new AuthService(prisma as never,{signAsync:jest.fn()} as never,{} as never);
+
+    await expect(service.selectSubscription(authUser,{plan:GymSubscriptionPlan.TRIAL,deviceId:'android:1234567890abcdef'})).rejects.toMatchObject({status:429});
   });
 
   it('envía un código de recuperación de seis dígitos y guarda solamente su hash', async () => {

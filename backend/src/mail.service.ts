@@ -16,6 +16,21 @@ export class MailService {
     return this.sendAuthCode(input, 'EMAIL_VERIFICATION');
   }
 
+  async sendSubscriptionExpiryNotice(input: { to: string; name: string; gymName: string; endsAt: Date; stage: 'WARNING' | 'EXPIRED' }) {
+    const warning = input.stage === 'WARNING';
+    const expiryDate = input.endsAt.toLocaleDateString('es-CU', { timeZone:'America/Havana' });
+    const subject = warning ? 'Tu suscripción de GymFlow Mini vence en 3 días' : 'Tu suscripción de GymFlow Mini ha vencido';
+    const status = warning
+      ? `La suscripción de ${input.gymName} vence el ${expiryDate}.`
+      : `La suscripción de ${input.gymName} venció el ${expiryDate}.`;
+    const action = warning
+      ? 'Puedes renovarla desde el apartado Cuenta para mantener todas las operaciones disponibles.'
+      : 'Renueva la suscripción desde el apartado Cuenta para volver a habilitar todas las operaciones.';
+    const text = `Hola ${input.name}. ${status} ${action}`;
+    const html = `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#17221d"><h2 style="color:#173f31">GymFlow Mini</h2><p>Hola ${this.escape(input.name)},</p><p>${this.escape(status)}</p><div style="margin:24px 0;padding:18px;background:#f2f5f3;border-radius:12px;color:#173f31;font-weight:700">${this.escape(action)}</div><p style="color:#657169;font-size:13px">Este es un aviso automático relacionado con la suscripción de tu gimnasio.</p></div>`;
+    return this.sendMessage({ to:input.to, name:input.name, subject, text, html });
+  }
+
   private async sendAuthCode(input: { to: string; name: string; code: string }, purpose: 'PASSWORD_RESET' | 'EMAIL_VERIFICATION') {
     const verifyingEmail = purpose === 'EMAIL_VERIFICATION';
     const subject = `${input.code} es tu código de ${verifyingEmail ? 'verificación' : 'recuperación'} de GymFlow Mini`;
@@ -23,14 +38,18 @@ export class MailService {
     const safety = verifyingEmail ? 'Si no creaste esta cuenta, ignora este mensaje.' : 'Si no solicitaste este cambio, ignora este mensaje. Tu contraseña no se modificará.';
     const text = `Hola ${input.name}. Tu código para ${action} es ${input.code}. Vence en 15 minutos y solo puede usarse una vez. ${safety}`;
     const html = `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#17221d"><h2 style="color:#173f31">GymFlow Mini</h2><p>Hola ${this.escape(input.name)},</p><p>Usa este código para ${action}:</p><div style="margin:24px 0;padding:18px;text-align:center;background:#f2f5f3;border-radius:12px;font-size:30px;font-weight:800;letter-spacing:8px;color:#1d6b4d">${input.code}</div><p>El código vence en <strong>15 minutos</strong> y solo puede utilizarse una vez.</p><p style="color:#657169;font-size:13px">${safety}</p></div>`;
+    return this.sendMessage({ to:input.to, name:input.name, subject, text, html });
+  }
+
+  private async sendMessage(input: { to: string; name: string; subject: string; text: string; html: string }) {
     const provider = this.config.get<string>('MAIL_PROVIDER')?.trim().toLowerCase();
     if (provider === 'apps_script' || provider === 'google_apps_script') {
-      await this.sendWithGoogleAppsScript({ ...input, subject, text, html });
+      await this.sendWithGoogleAppsScript(input);
       return;
     }
 
     if (provider === 'gmail' || provider === 'gmail_api') {
-      await this.sendWithGmailApi({ ...input, subject, text, html });
+      await this.sendWithGmailApi(input);
       return;
     }
 
@@ -38,7 +57,7 @@ export class MailService {
     const mailjetSecretKey = this.config.get<string>('MAILJET_SECRET_KEY')?.trim();
     if (provider === 'mailjet' || (provider !== 'smtp' && mailjetApiKey && mailjetSecretKey)) {
       if (!mailjetApiKey || !mailjetSecretKey) throw new ServiceUnavailableException('El correo de soporte no está configurado');
-      await this.sendWithMailjet({ ...input, apiKey: mailjetApiKey, secretKey: mailjetSecretKey, subject, text, html });
+      await this.sendWithMailjet({ ...input, apiKey: mailjetApiKey, secretKey: mailjetSecretKey });
       return;
     }
 
@@ -54,13 +73,13 @@ export class MailService {
       await transporter.sendMail({
         from,
         to: input.to,
-        subject,
-        text,
-        html,
+        subject:input.subject,
+        text:input.text,
+        html:input.html,
       });
     } catch (error) {
-      this.logger.error(`No se pudo enviar el código de seguridad a ${input.to}`, error instanceof Error ? error.stack : undefined);
-      throw new ServiceUnavailableException('No se pudo enviar el correo de seguridad');
+      this.logger.error(`No se pudo enviar el correo a ${input.to}`, error instanceof Error ? error.stack : undefined);
+      throw new ServiceUnavailableException('No se pudo enviar el correo');
     }
   }
 
@@ -81,8 +100,8 @@ export class MailService {
       const result = await response.json().catch(() => null) as { ok?: boolean; error?: string } | null;
       if (!result?.ok) throw new Error(`Google Apps Script rechazó el envío${result?.error ? `: ${result.error.slice(0, 200)}` : ''}`);
     } catch (error) {
-      this.logger.error(`No se pudo enviar el código de seguridad a ${input.to} mediante Google Apps Script`, error instanceof Error ? error.stack : undefined);
-      throw new ServiceUnavailableException('No se pudo enviar el correo de seguridad');
+      this.logger.error(`No se pudo enviar el correo a ${input.to} mediante Google Apps Script`, error instanceof Error ? error.stack : undefined);
+      throw new ServiceUnavailableException('No se pudo enviar el correo');
     }
   }
 
@@ -120,8 +139,8 @@ export class MailService {
         throw new Error(`Gmail API respondió ${sendResponse.status}${detail ? `: ${detail}` : ''}`);
       }
     } catch (error) {
-      this.logger.error(`No se pudo enviar el código de seguridad a ${input.to} mediante Gmail API`, error instanceof Error ? error.stack : undefined);
-      throw new ServiceUnavailableException('No se pudo enviar el correo de seguridad');
+      this.logger.error(`No se pudo enviar el correo a ${input.to} mediante Gmail API`, error instanceof Error ? error.stack : undefined);
+      throw new ServiceUnavailableException('No se pudo enviar el correo');
     }
   }
 
@@ -167,8 +186,8 @@ export class MailService {
         throw new Error(`Mailjet respondió ${response.status}${detail ? `: ${detail}` : ''}`);
       }
     } catch (error) {
-      this.logger.error(`No se pudo enviar el código de seguridad a ${input.to} mediante Mailjet`, error instanceof Error ? error.stack : undefined);
-      throw new ServiceUnavailableException('No se pudo enviar el correo de seguridad');
+      this.logger.error(`No se pudo enviar el correo a ${input.to} mediante Mailjet`, error instanceof Error ? error.stack : undefined);
+      throw new ServiceUnavailableException('No se pudo enviar el correo');
     }
   }
 

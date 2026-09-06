@@ -1,4 +1,5 @@
 import type { Member, Payment, Plan } from './types';
+import { isMembershipDayBefore, membershipIsCurrent } from './membershipDates';
 
 export type StatisticBar = { id: string; label: string; value: number };
 export type PlanStatistic = { id: string; name: string; contracted: number; active: number; revenue: number; averagePrice: number };
@@ -35,11 +36,7 @@ function planSnapshot(payment: Payment): Plan {
 }
 
 function membershipIsValid(payment: Payment, now: Date) {
-  const membership = payment.membership;
-  if (membership.status !== 'ACTIVE') return false;
-  const start = validDate(membership.startDate);
-  const end = validDate(membership.endDate);
-  return (!start || start.getTime() <= now.getTime()) && !!end && end.getTime() >= now.getTime();
+  return membershipIsCurrent(payment.membership, now);
 }
 
 export function calculateGymStatistics(members: Member[], payments: Payment[], now = new Date()): GymStatistics {
@@ -73,7 +70,6 @@ export function calculateGymStatistics(members: Member[], payments: Payment[], n
     planRows.set(plan.id, row);
   }
   for (const payment of payments) {
-    if (payment.status === 'CANCELLED') continue;
     const plan = planSnapshot(payment);
     const row = planRows.get(plan.id) ?? { id:plan.id, name:plan.name, contracted:0, active:0, revenue:0, averagePrice:0 };
     row.revenue += payment.movements.reduce((sum, movement) => sum + finite(movement.amount), 0);
@@ -100,7 +96,6 @@ export function calculateGymStatistics(members: Member[], payments: Payment[], n
   const paymentHistory = new Map<string, ClientPaymentStatistic>();
   const debtHistory = new Map<string, ClientDebtStatistic>();
   for (const payment of payments) {
-    if (payment.status === 'CANCELLED') continue;
     const name = `${payment.member.firstName} ${payment.member.lastName}`.trim();
     const paid = payment.movements.reduce((sum, movement) => sum + finite(movement.amount), 0);
     const history = paymentHistory.get(payment.member.id) ?? { id:payment.member.id, name, amount:0, operations:0 };
@@ -109,11 +104,10 @@ export function calculateGymStatistics(members: Member[], payments: Payment[], n
     paymentHistory.set(payment.member.id, history);
     const balance = Math.max(0, finite(payment.amount) - finite(payment.paidAmount));
     if (balance <= 0) continue;
-    const dueDate = validDate(payment.dueDate);
     const debt = debtHistory.get(payment.member.id) ?? { id:payment.member.id, name, amount:0, payments:0, overdue:false };
     debt.amount += balance;
     debt.payments += 1;
-    debt.overdue ||= payment.status === 'OVERDUE' || (!!dueDate && dueDate.getTime() < now.getTime());
+    debt.overdue ||= payment.status === 'OVERDUE' || (!!payment.dueDate && isMembershipDayBefore(payment.dueDate, now));
     debtHistory.set(payment.member.id, debt);
   }
   const topPayments = [...paymentHistory.values()].filter(row => row.amount > 0).sort((left, right) => right.amount - left.amount).slice(0, 8);

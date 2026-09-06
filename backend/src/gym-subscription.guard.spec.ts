@@ -23,18 +23,23 @@ describe('GymSubscriptionGuard', () => {
   });
 
   it('bloquea escrituras de un gimnasio vencido con el mensaje de renovación', async () => {
-    const guard = createGuard({ gym: { findUnique: jest.fn().mockResolvedValue({ isActive:true, subscriptionEndsAt:new Date(Date.now()-1) }) } });
-    await expect(guard.canActivate(context('POST'))).rejects.toEqual(new ForbiddenException('Para continuar debes renovar la membresía de tu gimnasio.'));
+    const guard = createGuard({ gym: { findUnique: jest.fn().mockResolvedValue({ isActive:true, subscriptionEndsAt:new Date(Date.now()-48*60*60*1000) }) } });
+    await expect(guard.canActivate(context('POST'))).rejects.toEqual(new ForbiddenException('Para continuar debes renovar la suscripción de tu gimnasio.'));
   });
 
-  it('bloquea escrituras cuando el gimnasio no tiene membresía', async () => {
+  it('bloquea escrituras cuando el gimnasio no tiene suscripción', async () => {
     const guard = createGuard({ gym: { findUnique: jest.fn().mockResolvedValue({ isActive:true, subscriptionEndsAt:null }) } });
-    await expect(guard.canActivate(context('POST'))).rejects.toEqual(new ForbiddenException('Para continuar debes renovar la membresía de tu gimnasio.'));
+    await expect(guard.canActivate(context('POST'))).rejects.toEqual(new ForbiddenException('Para continuar debes renovar la suscripción de tu gimnasio.'));
   });
 
   it('permite escrituras mientras la suscripción está activa', async () => {
     const guard = createGuard({ gym: { findUnique: jest.fn().mockResolvedValue({ isActive:true, subscriptionEndsAt:new Date(Date.now()+60_000) }) } });
     await expect(guard.canActivate(context('PATCH'))).resolves.toBe(true);
+  });
+
+  it('permite escrituras durante todo el día indicado como vencimiento', async () => {
+    const guard = createGuard({ gym: { findUnique: jest.fn().mockResolvedValue({ isActive:true, subscriptionEndsAt:new Date(Date.now()-1) }) } });
+    await expect(guard.canActivate(context('POST'))).resolves.toBe(true);
   });
 
   it('no restringe las operaciones del superadministrador', async () => {
@@ -44,10 +49,10 @@ describe('GymSubscriptionGuard', () => {
     expect(findUnique).not.toHaveBeenCalled();
   });
 
-  it('aplica la membresía del gimnasio a las recepcionistas', async () => {
-    const findUnique = jest.fn().mockResolvedValue({ isActive:true, subscriptionPlan:'MONTHLY', subscriptionEndsAt:new Date(Date.now()-1) });
+  it('aplica la suscripción del gimnasio a las recepcionistas', async () => {
+    const findUnique = jest.fn().mockResolvedValue({ isActive:true, subscriptionPlan:'MONTHLY', subscriptionEndsAt:new Date(Date.now()-48*60*60*1000) });
     const guard = createGuard({ gym:{ findUnique } });
-    await expect(guard.canActivate(context('POST',UserRole.RECEPTIONIST))).rejects.toEqual(new ForbiddenException('Para continuar debes renovar la membresía de tu gimnasio.'));
+    await expect(guard.canActivate(context('POST',UserRole.RECEPTIONIST))).rejects.toEqual(new ForbiddenException('Para continuar debes renovar la suscripción de tu gimnasio.'));
     expect(findUnique).toHaveBeenCalledWith(expect.objectContaining({ where:{ id:'gym-1' } }));
   });
 });

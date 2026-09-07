@@ -1,6 +1,6 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, HttpException, HttpStatus, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { GymSubscriptionPlan, Prisma, SubscriptionRequestStatus, UserRole } from '@prisma/client';
+import { GymSubscriptionPlan, Prisma, SubscriptionRequestAction, SubscriptionRequestStatus, UserRole } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'crypto';
 import { PrismaService } from './prisma.service';
@@ -8,6 +8,9 @@ import { ChangePasswordDto, ForgotPasswordDto, GoogleLoginDto, LoginDto, Registe
 import type { AuthUser } from './common';
 import { GoogleIdentityService } from './google-identity.service';
 import { MailService } from './mail.service';
+import { subscriptionIsActiveThroughDay, subscriptionWarningStart } from './subscription-time';
+import { SubscriptionScheduleService } from './subscription-schedule.service';
+import { assertCubanLocation } from './cuba-locations';
 
 const PLATFORM_SUBSCRIPTION_PRICES: Record<GymSubscriptionPlan, number> = {
   [GymSubscriptionPlan.TRIAL]: 0,
@@ -15,9 +18,14 @@ const PLATFORM_SUBSCRIPTION_PRICES: Record<GymSubscriptionPlan, number> = {
   [GymSubscriptionPlan.ANNUAL]: 50000,
 };
 
+const TRIAL_REQUEST_WINDOW_MS = 24 * 60 * 60_000;
+const TRIAL_REQUEST_COOLDOWN_MS = 60_000;
+const TRIAL_REQUEST_LIMIT = 5;
+const TRIAL_IP_REQUEST_LIMIT = 20;
+
 @Injectable()
 export class AuthService {
-  constructor(private readonly prisma: PrismaService, private readonly jwt: JwtService, private readonly mail: MailService, private readonly googleIdentity?: GoogleIdentityService) {}
+  constructor(private readonly prisma: PrismaService, private readonly jwt: JwtService, private readonly mail: MailService, private readonly googleIdentity?: GoogleIdentityService, private readonly subscriptionSchedule?: SubscriptionScheduleService) {}
 
   private normalizePhone(value: string) {
     let phone = value.replace(/\D/g, '');
@@ -30,6 +38,11 @@ export class AuthService {
     return createHash('sha256').update(`gymflow-mini:${process.env.JWT_SECRET ?? 'local'}:${deviceId}`).digest('hex');
   }
 
+  private ipHash(ip?: string) {
+    const normalized = ip?.trim();
+    return normalized ? createHash('sha256').update(`gymflow-mini:${process.env.JWT_SECRET ?? 'local'}:ip:${normalized}`).digest('hex') : null;
+  }
+
   private resetCodeHash(userId: string, code: string) {
     return createHmac('sha256', process.env.JWT_SECRET ?? 'local').update(`${userId}:${code}`).digest('hex');
   }
@@ -40,6 +53,39 @@ export class AuthService {
 
   private emailVerificationRequired() {
     return process.env.NODE_ENV === 'production' || process.env.EMAIL_VERIFICATION_REQUIRED?.trim().toLowerCase() === 'true';
+  }
+
+  private publicSubscriptionRequest(request: { id:string; code:string; plan:GymSubscriptionPlan; action:SubscriptionRequestAction; fromPlan:GymSubscriptionPlan | null; status:SubscriptionRequestStatus; requestedAt:Date; resolvedAt:Date | null } | null | undefined) {
+    if (!request) return null;
+    return { id:request.id, code:request.code, plan:request.plan, action:request.action, fromPlan:request.fromPlan, status:request.status, requestedAt:request.requestedAt, resolvedAt:request.resolvedAt };
+  }
+
+  private assertSubscriptionAction(gym: { subscriptionPlan:GymSubscriptionPlan | null; subscriptionEndsAt:Date | null; scheduledSubscriptionPlan:GymSubscriptionPlan | null }, dto: SelectSubscriptionDto, now: Date) {
+    if (gym.scheduledSubscriptionPlan) throw new ConflictException('Ya existe un cambio de plan programado');
+    const current = gym.subscriptionPlan;
+    if (!current) {
+      if (dto.action !== SubscriptionRequestAction.ACTIVATE) throw new ConflictException('Debes activar primero una suscripción');
+      return;
+    }
+    if (dto.action === SubscriptionRequestAction.ACTIVATE) throw new ConflictException('Este gimnasio ya tiene una suscripción');
+    if (dto.action === SubscriptionRequestAction.RENEW) {
+      if (current === GymSubscriptionPlan.TRIAL || dto.plan !== current) throw new ConflictException('La renovación debe conservar el plan actual');
+      this.assertRenewalWindow(gym.subscriptionEndsAt, now);
+      return;
+    }
+    if (dto.action !== SubscriptionRequestAction.CHANGE || dto.plan === current || dto.plan === GymSubscriptionPlan.TRIAL) throw new ConflictException('El cambio de plan solicitado no es válido');
+    const immediateUpgrade = current === GymSubscriptionPlan.MONTHLY && dto.plan === GymSubscriptionPlan.ANNUAL;
+    const trialPurchase = current === GymSubscriptionPlan.TRIAL;
+    if (!immediateUpgrade && !trialPurchase) this.assertRenewalWindow(gym.subscriptionEndsAt, now);
+  }
+
+  private assertRenewalWindow(endsAt: Date | null, now: Date) {
+    if (!subscriptionIsActiveThroughDay(endsAt, now) || !endsAt) return;
+    const availableAt = subscriptionWarningStart(endsAt);
+    if (now < availableAt) {
+      const date = new Intl.DateTimeFormat('es-CU', { timeZone:'America/Havana', day:'numeric', month:'long', year:'numeric' }).format(availableAt);
+      throw new ConflictException(`Esta operación estará disponible a partir del ${date}, cuando falten 3 días para el vencimiento`);
+    }
   }
 
   private async sendEmailVerificationCode(user: { id:string; email:string; name:string }) {
@@ -69,15 +115,19 @@ export class AuthService {
   }
 
   private async profile(userId: string) {
+    if (this.subscriptionSchedule) {
+      const identity = await this.prisma.user.findUnique({ where:{ id:userId }, select:{ gymId:true } });
+      if (identity?.gymId) await this.subscriptionSchedule.activateDue(identity.gymId);
+    }
     const found = await this.prisma.user.findUnique({
       where: { id: userId },
       include: { gym: { include: { subscriptionRequests: { orderBy: { requestedAt: 'desc' }, take: 1 } } } },
     });
     if (!found || !found.isActive) throw new UnauthorizedException();
     const gym = found.gym ? (() => { const { subscriptionRequests, ...data } = found.gym; return data; })() : null;
-    const latestSubscriptionRequest = found.gym?.subscriptionRequests[0] ?? null;
+    const latestSubscriptionRequest = this.publicSubscriptionRequest(found.gym?.subscriptionRequests[0]);
     const subscriptionRequest = latestSubscriptionRequest?.status === SubscriptionRequestStatus.PENDING ? latestSubscriptionRequest : null;
-    return { id: found.id, email: found.email, phone: found.phone, name: found.name, role: found.role, gymId: found.gymId, gym, subscriptionRequest, latestSubscriptionRequest };
+    return { id: found.id, email: found.email, phone: found.phone, phoneVerifiedAt: found.phoneVerifiedAt, name: found.name, role: found.role, gymId: found.gymId, gym, subscriptionRequest, latestSubscriptionRequest };
   }
 
   private async session(userId: string) {
@@ -91,10 +141,10 @@ export class AuthService {
     if (!user || !user.isActive || !(await argon2.verify(user.passwordHash, dto.password))) {
       throw new UnauthorizedException('Credenciales incorrectas');
     }
-    if (user.role === 'ADMIN' && (!user.gym || !user.gym.isActive)) {
+    if (user.role !== UserRole.SUPER_ADMIN && (!user.gym || !user.gym.isActive)) {
       throw new UnauthorizedException('El gimnasio está inactivo');
     }
-    if (user.role === UserRole.ADMIN && this.emailVerificationRequired() && user.emailVerifiedAt === null) {
+    if (user.role !== UserRole.SUPER_ADMIN && this.emailVerificationRequired() && user.emailVerifiedAt === null) {
       throw new ForbiddenException({ code:'EMAIL_NOT_VERIFIED', message:'Debes verificar tu correo antes de iniciar sesión' });
     }
     return this.session(user.id);
@@ -105,20 +155,23 @@ export class AuthService {
     const email = await this.googleIdentity.verifiedEmail(dto.idToken);
     const user = await this.prisma.user.findUnique({ where: { email }, include: { gym: true } });
     if (!user) throw new UnauthorizedException('No existe una cuenta de GymFlow con este correo. Crea tu cuenta primero');
-    if (!user.isActive || user.role !== UserRole.ADMIN) throw new UnauthorizedException('Esta cuenta no puede acceder a la aplicación de administradores');
+    if (!user.isActive || (user.role !== UserRole.ADMIN && user.role !== UserRole.RECEPTIONIST)) throw new UnauthorizedException('Esta cuenta no puede acceder a la aplicación del gimnasio');
     if (!user.gym || !user.gym.isActive) throw new UnauthorizedException('El gimnasio está inactivo');
     if (user.emailVerifiedAt === null) await this.prisma.user.update({ where:{ id:user.id }, data:{ emailVerifiedAt:new Date() } });
     return this.session(user.id);
   }
 
   async register(dto: RegisterDto) {
+    const province = dto.province.trim();
+    const municipality = dto.municipality.trim();
+    assertCubanLocation(province, municipality);
     const email = dto.email.trim().toLowerCase();
     const phone = this.normalizePhone(dto.phone);
     const passwordHash = await argon2.hash(dto.password);
     const verificationRequired = this.emailVerificationRequired();
     try {
       const user = await this.prisma.$transaction(async (tx) => {
-        const gym = await tx.gym.create({ data: { name: dto.gymName.trim(), slug: this.slug(dto.gymName), province: dto.province?.trim() || null, phone, currency: 'CUP', isActive: true } });
+        const gym = await tx.gym.create({ data: { name: dto.gymName.trim(), slug: this.slug(dto.gymName), province, municipality, phone, currency: 'CUP', isActive: true } });
         return tx.user.create({ data: { email, phone, passwordHash, name: dto.ownerName.trim(), role: UserRole.ADMIN, gymId: gym.id, emailVerifiedAt:verificationRequired ? null : new Date() } });
       });
       if (verificationRequired) {
@@ -177,38 +230,62 @@ export class AuthService {
     return this.session(user.id);
   }
 
-  async selectSubscription(user: AuthUser, dto: SelectSubscriptionDto) {
+  async selectSubscription(user: AuthUser, dto: SelectSubscriptionDto, requestIp?: string) {
     if (!user.gymId) throw new ConflictException('La cuenta no pertenece a un gimnasio');
+    await this.subscriptionSchedule?.activateDue(user.gymId);
     const owner = await this.prisma.user.findUnique({ where: { id: user.id }, select: { phone: true } });
-    if (!owner?.phone) throw new ConflictException('La cuenta no tiene un teléfono verificado');
+    if (!owner?.phone) throw new ConflictException('La cuenta no tiene un teléfono móvil registrado');
 
     if (dto.plan === GymSubscriptionPlan.TRIAL) {
+      if (dto.action !== SubscriptionRequestAction.ACTIVATE) throw new ConflictException('La prueba solo puede solicitarse como activación inicial');
       const now = new Date();
-      const endsAt = new Date(now); endsAt.setDate(endsAt.getDate() + 7);
-      try {
-        await this.prisma.$transaction(async (tx) => {
-          const gym = await tx.gym.findUniqueOrThrow({ where: { id: user.gymId! } });
-          if (gym.subscriptionPlan) throw new ConflictException('Este gimnasio ya utilizó o tiene una membresía');
-          await tx.trialClaim.create({ data: { gymId: user.gymId!, phone: owner.phone!, deviceHash: this.deviceHash(dto.deviceId) } });
-          await tx.subscriptionRequest.updateMany({ where: { gymId: user.gymId!, status: SubscriptionRequestStatus.PENDING }, data: { status: SubscriptionRequestStatus.CANCELLED, resolvedAt: now } });
-          await tx.gym.update({ where: { id: user.gymId! }, data: { subscriptionPlan: GymSubscriptionPlan.TRIAL, subscriptionTrialDays: 7, subscriptionStartedAt: now, subscriptionEndsAt: endsAt } });
-          await tx.platformSubscription.create({ data: { gymId: user.gymId!, plan: GymSubscriptionPlan.TRIAL, amount: 0, startedAt: now, endsAt } });
-        });
-      } catch (error) {
-        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw new ConflictException('La prueba gratuita ya fue utilizada con este teléfono o dispositivo');
-        throw error;
+      const hashedDevice = this.deviceHash(dto.deviceId);
+      const hashedIp = this.ipHash(requestIp);
+      const used = await this.prisma.trialClaim.findFirst({ where: { OR: [{ phone: owner.phone }, { deviceHash: hashedDevice }] }, select: { id: true } });
+      if (used) throw new ConflictException('La prueba gratuita ya fue utilizada con este teléfono o dispositivo');
+
+      const pending = await this.prisma.subscriptionRequest.findFirst({ where: { gymId: user.gymId, plan: GymSubscriptionPlan.TRIAL, status: SubscriptionRequestStatus.PENDING }, orderBy: { requestedAt: 'desc' } });
+      if (pending) {
+        const elapsed = now.getTime() - pending.lastRequestedAt.getTime();
+        if (elapsed < TRIAL_REQUEST_COOLDOWN_MS) {
+          const seconds = Math.ceil((TRIAL_REQUEST_COOLDOWN_MS - elapsed) / 1000);
+          throw new HttpException(`Espera ${seconds} segundos antes de reenviar la solicitud por WhatsApp`, HttpStatus.TOO_MANY_REQUESTS);
+        }
+        if (pending.requestedAt.getTime() >= now.getTime() - TRIAL_REQUEST_WINDOW_MS && pending.resendCount >= TRIAL_REQUEST_LIMIT - 1) {
+          throw new HttpException('Alcanzaste el límite de reenvíos. Intenta nuevamente dentro de 24 horas', HttpStatus.TOO_MANY_REQUESTS);
+        }
+        const windowExpired = pending.requestedAt.getTime() < now.getTime() - TRIAL_REQUEST_WINDOW_MS;
+        const resent = await this.prisma.subscriptionRequest.update({ where: { id: pending.id }, data: windowExpired ? { requestedAt: now, lastRequestedAt: now, resendCount: 0 } : { resendCount: { increment: 1 }, lastRequestedAt: now } });
+        return { user: await this.profile(user.id), request: this.publicSubscriptionRequest(resent) };
       }
-      return { user: await this.profile(user.id), request: null };
+
+      const dayAgo = new Date(now.getTime() - TRIAL_REQUEST_WINDOW_MS);
+      const [identityAttempts, ipAttempts] = await Promise.all([
+        this.prisma.subscriptionRequest.count({ where: { plan: GymSubscriptionPlan.TRIAL, requestedAt: { gte: dayAgo }, OR: [{ verificationPhone: owner.phone }, { deviceHash: hashedDevice }] } }),
+        hashedIp ? this.prisma.subscriptionRequest.count({ where: { plan: GymSubscriptionPlan.TRIAL, requestedAt: { gte: dayAgo }, ipHash: hashedIp } }) : Promise.resolve(0),
+      ]);
+      if (identityAttempts >= TRIAL_REQUEST_LIMIT || ipAttempts >= TRIAL_IP_REQUEST_LIMIT) throw new HttpException('Alcanzaste el límite de solicitudes de prueba. Intenta nuevamente dentro de 24 horas', HttpStatus.TOO_MANY_REQUESTS);
+
+      const request = await this.prisma.$transaction(async (tx) => {
+        const gym = await tx.gym.findUniqueOrThrow({ where: { id: user.gymId! } });
+        if (gym.subscriptionPlan) throw new ConflictException('Este gimnasio ya utilizó o tiene una suscripción');
+        await tx.subscriptionRequest.updateMany({ where: { gymId: user.gymId!, status: SubscriptionRequestStatus.PENDING }, data: { status: SubscriptionRequestStatus.CANCELLED, resolvedAt: now } });
+        return tx.subscriptionRequest.create({ data: { code: `GF-T-${randomBytes(3).toString('hex').toUpperCase()}`, gymId: user.gymId!, plan: GymSubscriptionPlan.TRIAL, action: SubscriptionRequestAction.ACTIVATE, verificationPhone: owner.phone!, deviceHash: hashedDevice, ipHash: hashedIp, lastRequestedAt: now } });
+      });
+      return { user: await this.profile(user.id), request: this.publicSubscriptionRequest(request) };
     }
 
-    const existing = await this.prisma.subscriptionRequest.findFirst({ where: { gymId: user.gymId, plan: dto.plan, status: SubscriptionRequestStatus.PENDING }, orderBy: { requestedAt: 'desc' } });
-    if (existing) return { user: await this.profile(user.id), request: existing };
+    const now = new Date();
+    const gym = await this.prisma.gym.findUnique({ where:{ id:user.gymId }, select:{ subscriptionPlan:true, subscriptionEndsAt:true, scheduledSubscriptionPlan:true } });
+    if (!gym) throw new ConflictException('El gimnasio no existe');
+    this.assertSubscriptionAction(gym, dto, now);
+    const existing = await this.prisma.subscriptionRequest.findFirst({ where: { gymId: user.gymId, plan: dto.plan, action: dto.action, status: SubscriptionRequestStatus.PENDING }, orderBy: { requestedAt: 'desc' } });
+    if (existing) return { user: await this.profile(user.id), request: this.publicSubscriptionRequest(existing) };
     const request = await this.prisma.$transaction(async (tx) => {
-      const now = new Date();
       await tx.subscriptionRequest.updateMany({ where: { gymId: user.gymId!, status: SubscriptionRequestStatus.PENDING }, data: { status: SubscriptionRequestStatus.CANCELLED, resolvedAt: now } });
-      return tx.subscriptionRequest.create({ data: { code: `GF-${randomBytes(3).toString('hex').toUpperCase()}`, gymId: user.gymId!, plan: dto.plan } });
+      return tx.subscriptionRequest.create({ data: { code: `GF-${randomBytes(3).toString('hex').toUpperCase()}`, gymId: user.gymId!, plan: dto.plan, action:dto.action, fromPlan:gym.subscriptionPlan, previousEndsAt:gym.subscriptionEndsAt } });
     });
-    return { user: await this.profile(user.id), request };
+    return { user: await this.profile(user.id), request: this.publicSubscriptionRequest(request) };
   }
 
   async forgotPassword(dto: ForgotPasswordDto) {

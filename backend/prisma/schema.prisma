@@ -10,6 +10,7 @@ datasource db {
 enum UserRole {
   SUPER_ADMIN
   ADMIN
+  RECEPTIONIST
 }
 
 enum GymSubscriptionPlan {
@@ -23,6 +24,12 @@ enum SubscriptionRequestStatus {
   APPROVED
   REJECTED
   CANCELLED
+}
+
+enum SubscriptionRequestAction {
+  ACTIVATE
+  RENEW
+  CHANGE
 }
 
 enum MemberStatus {
@@ -57,19 +64,25 @@ enum AttendanceMethod {
 }
 
 model Gym {
-  id                    String               @id @default(uuid())
-  name                  String
-  slug                  String               @unique
-  province              String?
-  phone                 String?
-  currency              String               @default("CUP")
-  isActive              Boolean              @default(true)
-  subscriptionPlan      GymSubscriptionPlan?
-  subscriptionTrialDays Int                  @default(7)
-  subscriptionStartedAt DateTime?
-  subscriptionEndsAt    DateTime?
-  createdAt             DateTime             @default(now())
-  updatedAt             DateTime             @updatedAt
+  id                            String               @id @default(uuid())
+  name                          String
+  slug                          String               @unique
+  province                      String?
+  municipality                  String?
+  phone                         String?
+  currency                      String               @default("CUP")
+  isActive                      Boolean              @default(true)
+  subscriptionPlan              GymSubscriptionPlan?
+  subscriptionTrialDays         Int                  @default(7)
+  subscriptionStartedAt         DateTime?
+  subscriptionEndsAt            DateTime?
+  subscriptionWarningSentFor    DateTime?
+  subscriptionExpiredSentFor    DateTime?
+  scheduledSubscriptionPlan     GymSubscriptionPlan?
+  scheduledSubscriptionStartsAt DateTime?
+  scheduledSubscriptionEndsAt   DateTime?
+  createdAt                     DateTime             @default(now())
+  updatedAt                     DateTime             @updatedAt
 
   users                 User[]
   members               Member[]
@@ -83,17 +96,29 @@ model Gym {
 }
 
 model SubscriptionRequest {
-  id          String                    @id @default(uuid())
-  code        String                    @unique
-  gymId       String
-  gym         Gym                       @relation(fields: [gymId], references: [id], onDelete: Cascade)
-  plan        GymSubscriptionPlan
-  status      SubscriptionRequestStatus @default(PENDING)
-  requestedAt DateTime                  @default(now())
-  resolvedAt  DateTime?
+  id                String                    @id @default(uuid())
+  code              String                    @unique
+  gymId             String
+  gym               Gym                       @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  plan              GymSubscriptionPlan
+  action            SubscriptionRequestAction @default(ACTIVATE)
+  fromPlan          GymSubscriptionPlan?
+  previousEndsAt    DateTime?
+  status            SubscriptionRequestStatus @default(PENDING)
+  requestedAt       DateTime                  @default(now())
+  resolvedAt        DateTime?
+  /// Datos de control usados solo por la verificación manual de pruebas.
+  verificationPhone String?
+  deviceHash        String?
+  ipHash            String?
+  resendCount       Int                       @default(0)
+  lastRequestedAt   DateTime                  @default(now())
 
   @@index([status, requestedAt])
   @@index([gymId, requestedAt])
+  @@index([verificationPhone, requestedAt])
+  @@index([deviceHash, requestedAt])
+  @@index([ipHash, requestedAt])
 }
 
 model TrialClaim {
@@ -131,6 +156,7 @@ model User {
   gym             Gym?      @relation(fields: [gymId], references: [id])
   isActive        Boolean   @default(true)
   emailVerifiedAt DateTime?
+  phoneVerifiedAt DateTime?
   createdAt       DateTime  @default(now())
 
   movements              PaymentMovement[]
@@ -184,7 +210,7 @@ model Member {
   phone          String?
   address        String?
   qrCode         String       @unique @default(uuid())
-  status         MemberStatus @default(ACTIVE)
+  status         MemberStatus @default(INACTIVE)
   joinedAt       DateTime     @default(now())
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt

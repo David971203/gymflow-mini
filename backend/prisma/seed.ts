@@ -8,7 +8,7 @@ async function main() {
   const gym = await prisma.gym.upsert({
     where: { slug: 'habana-fitness' },
     update: { subscriptionPlan: GymSubscriptionPlan.ANNUAL, subscriptionStartedAt, subscriptionEndsAt },
-    create: { name: 'Habana Fitness', slug: 'habana-fitness', province: 'La Habana', phone: '+53 5 123 4567', subscriptionPlan: GymSubscriptionPlan.ANNUAL, subscriptionStartedAt, subscriptionEndsAt },
+    create: { name: 'Habana Fitness', slug: 'habana-fitness', province: 'La Habana', municipality: 'Plaza', phone: '+53 5 123 4567', subscriptionPlan: GymSubscriptionPlan.ANNUAL, subscriptionStartedAt, subscriptionEndsAt },
   });
   await prisma.user.upsert({ where: { email: 'super@gymflowmini.cu' }, update: {}, create: { email: 'super@gymflowmini.cu', passwordHash: await argon2.hash('SuperMini123!'), name: 'David', role: UserRole.SUPER_ADMIN } });
   const admin = await prisma.user.upsert({ where: { email: 'admin@habanafitness.cu' }, update: { phone: '+53 5 123 4567' }, create: { email: 'admin@habanafitness.cu', phone: '+53 5 123 4567', passwordHash: await argon2.hash('AdminMini123!'), name: 'Administrador Habana Fitness', role: UserRole.ADMIN, gymId: gym.id } });

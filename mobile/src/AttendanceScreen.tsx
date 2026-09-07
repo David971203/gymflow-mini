@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import QRCode from 'react-native-qrcode-svg';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { offline, syncNow } from './offline';
+import { membershipIsCurrent } from './membershipDates';
 import type { Attendance, Member } from './types';
 
 type Props = {
@@ -20,9 +21,7 @@ const fullName = (member: Pick<Member, 'firstName' | 'lastName'>) => `${member.f
 const formatTime = (value: string) => new Date(value).toLocaleTimeString('es-CU', { hour: '2-digit', minute: '2-digit' });
 
 function hasCurrentMembership(member: Member, now: number) {
-  return member.memberships.some((membership) => membership.status === 'ACTIVE'
-    && new Date(membership.startDate).getTime() <= now
-    && new Date(membership.endDate).getTime() >= now);
+  return member.memberships.some((membership) => membershipIsCurrent(membership, now));
 }
 
 export function AttendanceScreen({ scope, revision, dark, assertCanOperate, onError, onSuccess }: Props) {

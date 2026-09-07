@@ -5,6 +5,8 @@ describe('RegisterDto', () => {
   const registration = (phone: string) => Object.assign(new RegisterDto(), {
     ownerName: 'Ana Pérez',
     gymName: 'Gym Ana',
+    province: 'La Habana',
+    municipality: 'Plaza',
     phone,
     email: 'ana@example.com',
     password: 'ClaveSegura123',

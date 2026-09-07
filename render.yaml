@@ -20,6 +20,8 @@ services:
         generateValue: true
       - key: CORS_ORIGIN
         value: "*"
+      - key: TRUST_PROXY_HOPS
+        value: "1"
       - key: EMAIL_VERIFICATION_REQUIRED
         value: "false"
       - key: GOOGLE_AUTH_CLIENT_ID

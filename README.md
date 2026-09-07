@@ -8,7 +8,7 @@ No comparte API, base de datos, tokens ni despliegue con GymFlow completo.
 
 | Carpeta | Usuario | Plataforma | Funciones |
 |---|---|---|---|
-| `mobile/` | `ADMIN` | Android (Expo) | Dashboard, miembros, planes, asignación de membresías, deuda y abonos. |
+| `mobile/` | `ADMIN`, `RECEPTIONIST` | Android (Expo) | Dashboard, miembros, planes, asignación de membresías, deuda y abonos. |
 | `superadmin-web/` | `SUPER_ADMIN` | Web | Alta/activación de gimnasios y métricas consolidadas del piloto. |
 | `backend/` | Ambos | NestJS REST | Autenticación, multi-tenancy, reglas de negocio y PostgreSQL. |
 
@@ -22,33 +22,40 @@ Incluye:
 
 - Autorregistro del dueño desde Android con creación de su gimnasio y cuenta administrativa.
 - Verificación obligatoria del correo en producción mediante código de 6 dígitos; desarrollo puede omitirla mediante configuración del backend.
-- Prueba gratuita automática de 7 días, única por teléfono móvil y dispositivo Android.
+- Prueba gratuita de 7 días con verificación manual del teléfono por WhatsApp y aprobación desde el panel. Se concede una sola vez por teléfono y dispositivo.
+- Protección de solicitudes de prueba: espera de 60 segundos, hasta 5 envíos por teléfono/dispositivo y 20 por IP cada 24 horas.
 - Solicitudes de planes mensual y anual con código P2P, contacto por WhatsApp y aprobación desde el panel.
+- Las renovaciones y el cambio anual → mensual se habilitan durante los últimos 3 días; el nuevo período comienza el día posterior al vencimiento. El cambio mensual → anual puede aprobarse inmediatamente desde cualquier fecha.
 - Recuperación de contraseña mediante código de 6 dígitos enviado por Gmail y cambio seguro desde Cuenta.
 
 - Registro y edición básica de miembros con carnet de identidad cubano (CI) obligatorio.
+- Foto opcional procesada después del alta: si su subida falla, los datos confirmados se conservan y solo se reintenta la imagen.
+- Varias cuentas por gimnasio, con perfiles fijos de administrador y recepcionista.
 - Catálogo de planes con precio y duración en días.
 - Una membresía activa y una renovación programada como máximo por miembro.
 - Vencimiento calculado desde la duración del plan.
 - Cobro creado automáticamente al adquirir o renovar un plan.
 - Pagos pendientes, parciales, vencidos y pagados.
 - Abonos sin sobrepago y ledger de movimientos reales.
-- Indicadores de miembros, membresías activas, ingresos cobrados y deuda.
+- Indicadores de miembros, membresías activas, ingresos cobrados, por cobrar hoy, deuda vencida y saldo futuro.
 - Separación estricta entre gimnasios.
 
-No incluye en esta prueba: miembros con cuenta propia, entrenadores, rutinas, clases, reservas, QR, asistencia ni personal adicional.
+El estado activo/inactivo de un miembro no se edita directamente: se deriva de sus membresías vigentes. En finanzas, “por cobrar hoy” incluye lo vencido y lo que vence en la fecha actual; “deuda vencida” es solo lo anterior a hoy; “saldo futuro” aún no es exigible; y “saldo pendiente total” suma todos los importes no completados.
+
+No incluye en esta prueba: miembros con cuenta propia, entrenadores, rutinas, clases ni reservas.
 
 ## Roles
 
-- `SUPER_ADMIN`: no pertenece a un gimnasio. Solo entra al panel web y ve la plataforma completa.
-- `ADMIN`: pertenece obligatoriamente a un gimnasio activo. Solo entra a la app Android y solo ve su tenant.
+- `SUPER_ADMIN`: no pertenece a un gimnasio. Solo entra al panel web, ve la plataforma completa y es el único que puede crear o retirar cuentas `ADMIN`.
+- `ADMIN`: pertenece obligatoriamente a un gimnasio activo. Gestiona configuración, planes, suscripción y cuentas de recepcionistas, además de la operación diaria. Para solicitar otro administrador contacta con soporte desde la app.
+- `RECEPTIONIST`: pertenece a un gimnasio y entra a la misma app Android. Gestiona miembros, membresías, cobros y asistencia; no puede modificar planes, suscripción ni cuentas.
 
 Ambos clientes rechazan el rol equivocado y el backend mantiene la autorización efectiva.
 
 ## Modelo
 
 ```text
-Gym 1--N User(ADMIN)
+Gym 1--N User(ADMIN|RECEPTIONIST)
 Gym 1--N Member
 Gym 1--N Plan
 Member 1--N Membership N--1 Plan
@@ -61,7 +68,7 @@ Gym 1--N SyncReceipt N--1 User(ADMIN)
 
 ## Motor offline de Android
 
-La app Android es **local-first**. Después de un primer login con conexión, el administrador puede consultar y modificar miembros, planes, membresías y cobros sin Internet durante un máximo de **72 horas desde la última validación online**. Al vencer ese plazo se bloquean las acciones hasta recuperar conexión y verificar la membresía. La sesión cifrada puede conservarse en SecureStore hasta 14 días para recuperar la cuenta y sus datos locales, pero ese plazo no amplía el permiso de operar offline.
+La app Android es **local-first**. Después de un primer login con conexión, el administrador puede consultar y modificar miembros, planes, membresías y cobros sin Internet durante un máximo de **72 horas desde la última validación online**. Al vencer ese plazo se bloquean las acciones hasta recuperar conexión y verificar la suscripción. La suscripción permanece operativa durante todo el día indicado como fecha de vencimiento en `America/Havana`; el modo de solo consulta comienza al iniciar el día siguiente. La sesión cifrada puede conservarse en SecureStore hasta 14 días para recuperar la cuenta y sus datos locales, pero ese plazo no amplía el permiso de operar offline.
 
 ### Flujo de datos
 
@@ -79,10 +86,11 @@ Pantalla Android
 - `local_cache` guarda los snapshots de miembros, planes y pagos por `gymId`.
 - `sync_outbox` es una cola durable con estados `PENDING` y `REJECTED`. Cerrar la app o reiniciar el teléfono no pierde operaciones.
 - Cada creación genera UUID locales; cada mutación lleva un UUID idempotente. Reenviar el mismo lote no crea otra membresía ni duplica un movimiento financiero.
+- El alta inicial de un miembro, su membresía y su cobro viaja como una sola operación compuesta y se confirma en una única transacción del servidor.
 - La sincronización ocurre al iniciar, volver la app al primer plano, recuperar red, arrastrar para refrescar o tocar la barra de estado.
 - Los lotes se envían en orden, de 100 operaciones, hasta vaciar la cola. Después se descarga un snapshot completo; para el volumen del piloto es más simple y verificable que un cursor incremental.
 - Mientras hay una sincronización activa, una nueva escritura local espera a que termine. Así el snapshot no puede pisar una acción recién realizada.
-- Un rechazo afecta solo a su operación. La barra muestra una bandeja de incidencias que permite leer el motivo y descartar el aviso; el resto continúa sincronizando.
+- Un rechazo afecta solo a su operación. La acción que lo originó no muestra una confirmación de éxito: presenta el motivo concreto. Si no hay conexión, informa que el cambio quedó guardado localmente y pendiente de confirmación. La barra muestra una bandeja de incidencias que permite leer el motivo y descartar el aviso; el resto continúa sincronizando.
 
 ### Conflictos y CI duplicado
 
@@ -141,6 +149,7 @@ Variables necesarias en Production y Preview:
 - `DATABASE_URL`: PostgreSQL accesible desde Internet y preferiblemente con pool de conexiones.
 - `JWT_SECRET`: secreto largo y diferente al valor de ejemplo.
 - `CORS_ORIGIN`: origen público del panel web; durante una prueba controlada puede ser `*`.
+- `TRUST_PROXY_HOPS`: cantidad de proxies confiables delante del backend para obtener la IP real. En los servicios web de Render usa `1`; localmente se deja en `0`.
 
 Antes del primer despliegue aplica las migraciones contra la base de producción desde un entorno seguro:
 

@@ -7,7 +7,7 @@ import { CurrentUser, Roles, type AuthUser } from './common';
 
 @ApiTags('attendance')
 @Controller('attendance')
-@Roles(UserRole.ADMIN)
+@Roles(UserRole.ADMIN, UserRole.RECEPTIONIST)
 export class AttendanceController {
   constructor(private readonly attendance: AttendanceService) {}
   @Get() list(@Query() query: AttendanceQueryDto, @CurrentUser() user: AuthUser) { return this.attendance.list(user, query); }

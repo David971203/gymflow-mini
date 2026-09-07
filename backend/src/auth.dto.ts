@@ -1,4 +1,4 @@
-import { GymSubscriptionPlan } from '@prisma/client';
+import { GymSubscriptionPlan, SubscriptionRequestAction } from '@prisma/client';
 import { IsEmail, IsEnum, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
 
 export class LoginDto {
@@ -13,7 +13,8 @@ export class GoogleLoginDto {
 export class RegisterDto {
   @IsString() @MaxLength(100) ownerName: string;
   @IsString() @MaxLength(100) gymName: string;
-  @IsOptional() @IsString() @MaxLength(100) province?: string;
+  @IsString() @MaxLength(100) province: string;
+  @IsString() @MaxLength(100) municipality: string;
   @IsString() @Matches(/^\d{8}$/, { message: 'El teléfono móvil debe tener exactamente 8 dígitos' }) phone: string;
   @IsEmail() email: string;
   @IsString() @MinLength(8) password: string;
@@ -31,6 +32,7 @@ export class ResendEmailVerificationDto {
 
 export class SelectSubscriptionDto {
   @IsEnum(GymSubscriptionPlan) plan: GymSubscriptionPlan;
+  @IsEnum(SubscriptionRequestAction) action: SubscriptionRequestAction;
   @IsString() @MinLength(12) @MaxLength(200) deviceId: string;
 }
 

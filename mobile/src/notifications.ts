@@ -1,10 +1,12 @@
 import { Platform } from 'react-native';
 import { isRunningInExpoGo } from 'expo';
-import type { Member, Membership } from './types';
+import { membershipExpiryInstant, membershipIsCurrent, shiftMembershipDayStart } from './membershipDates';
+import type { Member } from './types';
 
 export const MEMBERSHIP_NOTIFICATION_SOURCE = 'gymflow-membership-expiry';
+export const SUBSCRIPTION_NOTIFICATION_SOURCE = 'gymflow-subscription-expiry';
 const MEMBERSHIP_CHANNEL_ID = 'membership-expirations';
-const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+const SUBSCRIPTION_CHANNEL_ID = 'subscription-expirations';
 
 type NotificationsModule = typeof import('expo-notifications');
 let notificationsModule: Promise<NotificationsModule> | null = null;
@@ -37,66 +39,71 @@ type MembershipAlert = {
   body: string;
   date: Date;
   stage: 'warning' | 'expired';
-  memberId: string;
-  membershipId: string;
+  count: number;
 };
 
-function contractedPlanName(membership: Membership) {
-  return membership.planName ?? membership.plan.name;
-}
-
-function notificationIdentifier(scope: string, membership: Membership, stage: MembershipAlert['stage']) {
-  const expiry = new Date(membership.endDate).getTime();
-  return `${MEMBERSHIP_NOTIFICATION_SOURCE}_${scope}_${membership.id}_${expiry}_${stage}`;
+function notificationIdentifier(scope: string, date: Date, stage: MembershipAlert['stage'], count: number) {
+  return `${MEMBERSHIP_NOTIFICATION_SOURCE}_${scope}_${date.getTime()}_${stage}_${count}`;
 }
 
 function activeMembershipAlerts(scope: string, members: Member[], now: number) {
-  const alerts: MembershipAlert[] = [];
+  const grouped = new Map<string, { date: Date; stage: MembershipAlert['stage']; count: number }>();
+  const addAlert = (date: Date, stage: MembershipAlert['stage']) => {
+    const key = `${stage}_${date.getTime()}`;
+    const current = grouped.get(key);
+    grouped.set(key, { date, stage, count:(current?.count ?? 0) + 1 });
+  };
+
   for (const member of members) {
     if (member.status !== 'ACTIVE') continue;
     for (const membership of member.memberships) {
-      if (membership.status !== 'ACTIVE') continue;
-      const expiresAt = new Date(membership.endDate);
+      if (!membershipIsCurrent(membership, now)) continue;
+      const expiresAt = membershipExpiryInstant(membership.endDate);
       const expiryTime = expiresAt.getTime();
       if (Number.isNaN(expiryTime) || expiryTime <= now) continue;
-      const fullName = `${member.firstName} ${member.lastName}`.trim();
-      const planName = contractedPlanName(membership);
-      const warningDate = new Date(expiryTime - THREE_DAYS_MS);
-      if (warningDate.getTime() > now) {
-        alerts.push({
-          identifier:notificationIdentifier(scope, membership, 'warning'),
-          title:'Membresía próxima a vencer',
-          body:`A ${fullName} le quedan 3 días del plan ${planName}.`,
-          date:warningDate,
-          stage:'warning',
-          memberId:member.id,
-          membershipId:membership.id,
-        });
-      }
-      alerts.push({
-        identifier:notificationIdentifier(scope, membership, 'expired'),
-        title:'Membresía vencida',
-        body:`La membresía de ${fullName} (${planName}) vence hoy.`,
-        date:expiresAt,
-        stage:'expired',
-        memberId:member.id,
-        membershipId:membership.id,
-      });
+      const warningDate = shiftMembershipDayStart(membership.endDate, -3);
+      if (warningDate.getTime() > now) addAlert(warningDate, 'warning');
+      addAlert(expiresAt, 'expired');
     }
   }
-  return alerts;
+
+  return [...grouped.values()].map(({ date, stage, count }): MembershipAlert => {
+    const plural = count !== 1;
+    return {
+      identifier:notificationIdentifier(scope, date, stage, count),
+      title:stage === 'warning'
+        ? `Membresía${plural ? 's' : ''} próxima${plural ? 's' : ''} a vencer`
+        : `Membresía${plural ? 's' : ''} vencida${plural ? 's' : ''}`,
+      body:stage === 'warning'
+        ? `${count} membresía${plural ? 's' : ''} vence${plural ? 'n' : ''} dentro de 3 días. Toca para revisar la lista.`
+        : `${count} membresía${plural ? 's' : ''} venci${plural ? 'eron' : 'ó'} hoy. Toca para revisar la lista.`,
+      date,
+      stage,
+      count,
+    };
+  });
 }
 
 async function ensureNotificationPermission(Notifications: NotificationsModule) {
   if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync(MEMBERSHIP_CHANNEL_ID, {
-      name:'Vencimientos de membresías',
-      description:'Avisos tres días antes y al vencer una membresía',
-      importance:Notifications.AndroidImportance.HIGH,
-      sound:'default',
-      vibrationPattern:[0, 250, 180, 250],
-      lightColor:'#C9F47B',
-    });
+    await Promise.all([
+      Notifications.setNotificationChannelAsync(MEMBERSHIP_CHANNEL_ID, {
+        name:'Vencimientos de membresías',
+        description:'Avisos tres días antes y al vencer una membresía',
+        importance:Notifications.AndroidImportance.HIGH,
+        sound:'default',
+        vibrationPattern:[0, 250, 180, 250],
+        lightColor:'#C9F47B',
+      }),
+      Notifications.setNotificationChannelAsync(SUBSCRIPTION_CHANNEL_ID, {
+        name:'Suscripción de GymFlow Mini',
+        description:'Avisos sobre el vencimiento de la suscripción del gimnasio',
+        importance:Notifications.AndroidImportance.HIGH,
+        sound:'default',
+        vibrationPattern:[0, 250, 180, 250],
+        lightColor:'#C9F47B',
+      }),
+    ]);
   }
   let permission = await Notifications.getPermissionsAsync();
   if (!permission.granted && permission.canAskAgain) permission = await Notifications.requestPermissionsAsync();
@@ -125,8 +132,7 @@ export async function syncMembershipNotifications(scope: string, members: Member
         source:MEMBERSHIP_NOTIFICATION_SOURCE,
         scope,
         stage:alert.stage,
-        memberId:alert.memberId,
-        membershipId:alert.membershipId,
+        count:alert.count,
       },
     },
     trigger:{ type:Notifications.SchedulableTriggerInputTypes.DATE, date:alert.date, channelId:MEMBERSHIP_CHANNEL_ID },
@@ -139,5 +145,42 @@ export async function cancelMembershipNotifications(scope: string) {
   if (!Notifications) return;
   const scheduled = await Notifications.getAllScheduledNotificationsAsync();
   const managed = scheduled.filter(request => request.content.data?.source === MEMBERSHIP_NOTIFICATION_SOURCE && request.content.data?.scope === scope);
+  await Promise.all(managed.map(request => Notifications.cancelScheduledNotificationAsync(request.identifier)));
+}
+
+export async function syncSubscriptionNotification(scope: string, gymName: string, subscriptionEndsAt: string | null) {
+  const Notifications = await getNotifications();
+  if (!Notifications || !await ensureNotificationPermission(Notifications)) return false;
+  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+  const managed = scheduled.filter(request => request.content.data?.source === SUBSCRIPTION_NOTIFICATION_SOURCE && request.content.data?.scope === scope);
+  const endsAt = subscriptionEndsAt ? new Date(subscriptionEndsAt) : new Date(Number.NaN);
+  const warningDate = new Date(endsAt);
+  warningDate.setDate(warningDate.getDate() - 3);
+  const desiredIdentifier = Number.isNaN(endsAt.getTime()) || endsAt.getTime() <= Date.now() || warningDate.getTime() <= Date.now()
+    ? null
+    : `${SUBSCRIPTION_NOTIFICATION_SOURCE}_${scope}_${endsAt.getTime()}_warning`;
+
+  await Promise.all(managed.filter(request => request.identifier !== desiredIdentifier).map(request => Notifications.cancelScheduledNotificationAsync(request.identifier)));
+  if (!desiredIdentifier || managed.some(request => request.identifier === desiredIdentifier)) return true;
+  await Notifications.scheduleNotificationAsync({
+    identifier:desiredIdentifier,
+    content:{
+      title:'Tu suscripción vence en 3 días',
+      body:`La suscripción de ${gymName} está próxima a vencer. Toca para revisarla en Cuenta.`,
+      sound:'default',
+      color:'#173F31',
+      priority:Notifications.AndroidNotificationPriority.HIGH,
+      data:{ source:SUBSCRIPTION_NOTIFICATION_SOURCE, scope, stage:'warning' },
+    },
+    trigger:{ type:Notifications.SchedulableTriggerInputTypes.DATE, date:warningDate, channelId:SUBSCRIPTION_CHANNEL_ID },
+  });
+  return true;
+}
+
+export async function cancelSubscriptionNotifications(scope: string) {
+  const Notifications = await getNotifications();
+  if (!Notifications) return;
+  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+  const managed = scheduled.filter(request => request.content.data?.source === SUBSCRIPTION_NOTIFICATION_SOURCE && request.content.data?.scope === scope);
   await Promise.all(managed.map(request => Notifications.cancelScheduledNotificationAsync(request.identifier)));
 }

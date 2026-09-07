@@ -1,0 +1,304 @@
+<div id="gymflow-membership-mock" aria-label="Propuesta de pantalla para renovar o cambiar una membresía">
+  <style>
+    #gymflow-membership-mock {
+      color: light-dark(#163126, #e9f4ed);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      display: grid;
+      place-items: start center;
+      padding: 8px;
+    }
+    #gymflow-membership-mock * { box-sizing: border-box; }
+    #gymflow-membership-mock .gf-phone {
+      width: min(100%, 430px);
+      overflow: hidden;
+      background: light-dark(#f4f7f4, #101713);
+      border: 1px solid light-dark(#d8e2da, #334039);
+      border-radius: 26px;
+      box-shadow: 0 16px 40px light-dark(rgba(18, 49, 37, .14), rgba(0, 0, 0, .35));
+    }
+    #gymflow-membership-mock .gf-top {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 18px 18px 14px;
+      background: light-dark(#ffffff, #18221c);
+      border-bottom: 1px solid light-dark(#dfe7e1, #334039);
+    }
+    #gymflow-membership-mock .gf-icon-button {
+      display: grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      border: 0;
+      border-radius: 13px;
+      color: light-dark(#1d6b4d, #c9f47b);
+      background: light-dark(#e7f3ec, #26352d);
+    }
+    #gymflow-membership-mock .gf-heading { min-width: 0; flex: 1; }
+    #gymflow-membership-mock .gf-eyebrow {
+      margin: 0 0 3px;
+      color: light-dark(#657169, #aab7b0);
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: .08em;
+    }
+    #gymflow-membership-mock h2 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 500;
+    }
+    #gymflow-membership-mock .gf-body { padding: 16px; }
+    #gymflow-membership-mock .gf-current {
+      padding: 16px;
+      border-radius: 18px;
+      color: light-dark(#f8fff9, #102016);
+      background: light-dark(#1d6b4d, #c9f47b);
+    }
+    #gymflow-membership-mock .gf-current-head,
+    #gymflow-membership-mock .gf-summary-row,
+    #gymflow-membership-mock .gf-plan-row,
+    #gymflow-membership-mock .gf-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    #gymflow-membership-mock .gf-current-label { margin: 0; font-size: 12px; opacity: .8; letter-spacing: .07em; }
+    #gymflow-membership-mock .gf-current-plan { margin: 8px 0 4px; font-size: 22px; font-weight: 500; }
+    #gymflow-membership-mock .gf-current-meta { margin: 0; font-size: 14px; opacity: .88; }
+    #gymflow-membership-mock .gf-status {
+      padding: 5px 9px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.2);
+      font-size: 12px;
+      font-weight: 500;
+    }
+    #gymflow-membership-mock .gf-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin: 14px 0;
+      padding: 5px;
+      border-radius: 15px;
+      background: light-dark(#e3ebe5, #202c25);
+    }
+    #gymflow-membership-mock .gf-action {
+      min-height: 44px;
+      border: 0;
+      border-radius: 11px;
+      padding: 9px 10px;
+      color: light-dark(#4e5f55, #b9c6be);
+      background: transparent;
+      font: inherit;
+      font-weight: 500;
+    }
+    #gymflow-membership-mock .gf-action[aria-selected="true"] {
+      color: light-dark(#173e2e, #ecf7ef);
+      background: light-dark(#ffffff, #34453b);
+      box-shadow: 0 2px 8px light-dark(rgba(22,49,38,.1), rgba(0,0,0,.22));
+    }
+    #gymflow-membership-mock .gf-panel {
+      padding: 16px;
+      border-radius: 18px;
+      background: light-dark(#ffffff, #18221c);
+      border: 1px solid light-dark(#dfe7e1, #334039);
+    }
+    #gymflow-membership-mock .gf-label {
+      display: block;
+      margin: 0 0 8px;
+      color: light-dark(#657169, #aab7b0);
+      font-size: 13px;
+      font-weight: 500;
+    }
+    #gymflow-membership-mock .gf-select {
+      width: 100%;
+      min-height: 46px;
+      padding: 0 12px;
+      border: 1px solid light-dark(#cfdad2, #415047);
+      border-radius: 12px;
+      color: light-dark(#163126, #e9f4ed);
+      background: light-dark(#fbfdfb, #101713);
+      font: inherit;
+    }
+    #gymflow-membership-mock .gf-field + .gf-field { margin-top: 14px; }
+    #gymflow-membership-mock .gf-choice-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    #gymflow-membership-mock .gf-choice {
+      min-height: 62px;
+      padding: 10px;
+      text-align: left;
+      border: 1px solid light-dark(#cfdad2, #415047);
+      border-radius: 12px;
+      color: light-dark(#30483a, #dce8df);
+      background: light-dark(#fbfdfb, #101713);
+      font: inherit;
+    }
+    #gymflow-membership-mock .gf-choice[aria-pressed="true"] {
+      border-color: light-dark(#1d6b4d, #c9f47b);
+      box-shadow: inset 0 0 0 1px light-dark(#1d6b4d, #c9f47b);
+      background: light-dark(#eff8f2, #25372d);
+    }
+    #gymflow-membership-mock .gf-choice strong,
+    #gymflow-membership-mock .gf-choice span { display: block; }
+    #gymflow-membership-mock .gf-choice strong { font-weight: 500; }
+    #gymflow-membership-mock .gf-choice span { margin-top: 3px; color: light-dark(#657169, #aab7b0); font-size: 12px; }
+    #gymflow-membership-mock .gf-summary {
+      margin-top: 16px;
+      padding: 14px;
+      border-radius: 14px;
+      background: light-dark(#eff8f2, #233129);
+    }
+    #gymflow-membership-mock .gf-summary-title { margin: 0 0 11px; color: light-dark(#1d6b4d, #c9f47b); font-size: 12px; font-weight: 500; letter-spacing: .06em; }
+    #gymflow-membership-mock .gf-summary-row { align-items: baseline; padding: 4px 0; }
+    #gymflow-membership-mock .gf-summary-row span { color: light-dark(#657169, #aab7b0); font-size: 13px; }
+    #gymflow-membership-mock .gf-summary-row strong { text-align: right; font-size: 14px; font-weight: 500; }
+    #gymflow-membership-mock .gf-note { margin: 12px 0 0; color: light-dark(#657169, #aab7b0); font-size: 12px; }
+    #gymflow-membership-mock .gf-footer { margin-top: 14px; }
+    #gymflow-membership-mock .gf-total span { display: block; color: light-dark(#657169, #aab7b0); font-size: 12px; }
+    #gymflow-membership-mock .gf-total strong { display: block; margin-top: 2px; font-size: 19px; font-weight: 500; }
+    #gymflow-membership-mock .gf-save {
+      min-height: 46px;
+      padding: 0 18px;
+      border: 0;
+      border-radius: 13px;
+      color: light-dark(#ffffff, #102016);
+      background: light-dark(#1d6b4d, #c9f47b);
+      font: inherit;
+      font-weight: 500;
+    }
+    #gymflow-membership-mock [hidden] { display: none !important; }
+    @media (max-width: 380px) {
+      #gymflow-membership-mock .gf-choice-grid { grid-template-columns: 1fr; }
+      #gymflow-membership-mock .gf-footer { align-items: stretch; flex-direction: column; }
+      #gymflow-membership-mock .gf-save { width: 100%; }
+    }
+  </style>
+
+  <section class="gf-phone">
+    <header class="gf-top">
+      <button class="gf-icon-button" type="button" aria-label="Volver"><i data-lucide="arrow-left" aria-hidden="true"></i></button>
+      <div class="gf-heading">
+        <p class="gf-eyebrow">MEMBRESÍA</p>
+        <h2>Carlos Rodríguez</h2>
+      </div>
+    </header>
+
+    <main class="gf-body">
+      <section class="gf-current" aria-label="Membresía actual">
+        <div class="gf-current-head"><p class="gf-current-label">PLAN ACTUAL</p><span class="gf-status">Activo</span></div>
+        <p class="gf-current-plan">Plan mensual</p>
+        <p class="gf-current-meta">Vence 20 sep 2026 · 10 días restantes</p>
+      </section>
+
+      <div class="gf-actions" role="tablist" aria-label="Operación de membresía">
+        <button id="gf-renew-tab" class="gf-action" type="button" role="tab" aria-selected="true" aria-controls="gf-renew-panel">Renovar actual</button>
+        <button id="gf-change-tab" class="gf-action" type="button" role="tab" aria-selected="false" aria-controls="gf-change-panel">Cambiar plan</button>
+      </div>
+
+      <section id="gf-renew-panel" class="gf-panel" role="tabpanel" aria-labelledby="gf-renew-tab">
+        <div class="gf-field">
+          <label class="gf-label" for="gf-periods">¿Cuántos períodos desea comprar?</label>
+          <select id="gf-periods" class="gf-select">
+            <option value="1">1 período · 30 días</option>
+            <option value="2" selected>2 períodos · 60 días</option>
+            <option value="3">3 períodos · 90 días</option>
+          </select>
+        </div>
+        <div class="gf-summary" aria-live="polite">
+          <p class="gf-summary-title">RESUMEN DE RENOVACIÓN</p>
+          <div class="gf-summary-row"><span>Tiempo conservado</span><strong>10 días</strong></div>
+          <div class="gf-summary-row"><span>Tiempo comprado</span><strong id="gf-renew-days">60 días</strong></div>
+          <div class="gf-summary-row"><span>Nuevo vencimiento</span><strong id="gf-renew-end">19 nov 2026</strong></div>
+        </div>
+        <p class="gf-note">Se mantiene una sola membresía actual. El nuevo pago queda registrado por separado.</p>
+        <div class="gf-footer"><div class="gf-total"><span>Total a cobrar</span><strong id="gf-renew-price">$2,000 CUP</strong></div><button class="gf-save" type="button">Confirmar renovación</button></div>
+      </section>
+
+      <section id="gf-change-panel" class="gf-panel" role="tabpanel" aria-labelledby="gf-change-tab" hidden>
+        <div class="gf-field">
+          <span class="gf-label">¿Cuándo aplicar el cambio?</span>
+          <div class="gf-choice-grid">
+            <button class="gf-choice gf-when" type="button" data-when="now" aria-pressed="true"><strong>Cambiar ahora</strong><span>Conserva los 10 días</span></button>
+            <button class="gf-choice gf-when" type="button" data-when="expiry" aria-pressed="false"><strong>Al vencimiento</strong><span>Empieza el 20 sep</span></button>
+          </div>
+        </div>
+        <div class="gf-field">
+          <label class="gf-label" for="gf-new-plan">Nuevo plan</label>
+          <select id="gf-new-plan" class="gf-select">
+            <option value="fitness">Plan fitness · 45 días · $1,500 CUP</option>
+            <option value="quarterly">Plan trimestral · 90 días · $2,700 CUP</option>
+          </select>
+        </div>
+        <div class="gf-summary" aria-live="polite">
+          <p class="gf-summary-title">RESULTADO DEL CAMBIO</p>
+          <div class="gf-summary-row"><span>Plan resultante</span><strong id="gf-change-name">Plan fitness</strong></div>
+          <div class="gf-summary-row"><span>Fecha efectiva</span><strong id="gf-change-start">Hoy, 10 sep</strong></div>
+          <div class="gf-summary-row"><span>Nuevo vencimiento</span><strong id="gf-change-end">4 nov 2026</strong></div>
+        </div>
+        <p id="gf-change-note" class="gf-note">Los 10 días restantes se suman a los 45 días comprados. El plan anterior queda en el historial.</p>
+        <div class="gf-footer"><div class="gf-total"><span>Total a cobrar</span><strong id="gf-change-price">$1,500 CUP</strong></div><button id="gf-change-save" class="gf-save" type="button">Confirmar cambio</button></div>
+      </section>
+    </main>
+  </section>
+
+  <script>
+    (() => {
+      const root = document.getElementById('gymflow-membership-mock');
+      const renewTab = root.querySelector('#gf-renew-tab');
+      const changeTab = root.querySelector('#gf-change-tab');
+      const renewPanel = root.querySelector('#gf-renew-panel');
+      const changePanel = root.querySelector('#gf-change-panel');
+      const periods = root.querySelector('#gf-periods');
+      const planSelect = root.querySelector('#gf-new-plan');
+      const state = { screen: 'renew', when: 'now', compactSummary: false };
+      const plans = {
+        fitness: { name: 'Plan fitness', days: 45, price: '$1,500 CUP', nowEnd: '4 nov 2026', expiryEnd: '4 nov 2026' },
+        quarterly: { name: 'Plan trimestral', days: 90, price: '$2,700 CUP', nowEnd: '19 dic 2026', expiryEnd: '19 dic 2026' }
+      };
+
+      function showScreen(screen) {
+        state.screen = screen;
+        const renewing = screen === 'renew';
+        renewTab.setAttribute('aria-selected', String(renewing));
+        changeTab.setAttribute('aria-selected', String(!renewing));
+        renewPanel.hidden = !renewing;
+        changePanel.hidden = renewing;
+      }
+
+      function updateRenewal() {
+        const count = Number(periods.value);
+        root.querySelector('#gf-renew-days').textContent = `${count * 30} días`;
+        root.querySelector('#gf-renew-end').textContent = ({ 1:'20 oct 2026', 2:'19 nov 2026', 3:'19 dic 2026' })[count];
+        root.querySelector('#gf-renew-price').textContent = `$${(count * 1000).toLocaleString('en-US')} CUP`;
+      }
+
+      function updateChange() {
+        const plan = plans[planSelect.value];
+        const now = state.when === 'now';
+        root.querySelectorAll('.gf-when').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.when === state.when)));
+        root.querySelector('#gf-change-name').textContent = plan.name;
+        root.querySelector('#gf-change-start').textContent = now ? 'Hoy, 10 sep' : '20 sep 2026';
+        root.querySelector('#gf-change-end').textContent = now ? plan.nowEnd : plan.expiryEnd;
+        root.querySelector('#gf-change-price').textContent = plan.price;
+        root.querySelector('#gf-change-note').textContent = now
+          ? `Los 10 días restantes se suman a los ${plan.days} días comprados. El plan anterior queda en el historial.`
+          : 'Solo se guarda un próximo cambio. Si se edita otra vez, esta selección se reemplaza.';
+        root.querySelector('#gf-change-save').textContent = now ? 'Confirmar cambio' : 'Programar cambio';
+      }
+
+      renewTab.addEventListener('click', () => showScreen('renew'));
+      changeTab.addEventListener('click', () => showScreen('change'));
+      periods.addEventListener('change', updateRenewal);
+      planSelect.addEventListener('change', updateChange);
+      root.querySelectorAll('.gf-when').forEach(button => button.addEventListener('click', () => { state.when = button.dataset.when; updateChange(); }));
+
+      showScreen(state.screen);
+      updateRenewal();
+      updateChange();
+
+      if (globalThis.Tweak) {
+        const tweak = new Tweak({ container: root, onChange: () => showScreen(state.screen) });
+        tweak.addSelect(state, 'screen', { label: 'Pantalla inicial', options: [{ label:'Renovar', value:'renew' }, { label:'Cambiar plan', value:'change' }], reference: 'membership.screen' });
+      }
+    })();
+  </script>
+</div>

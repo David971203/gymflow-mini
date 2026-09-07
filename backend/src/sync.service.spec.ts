@@ -61,6 +61,34 @@ describe('SyncService', () => {
     expect(receipts).toHaveLength(3);
   });
 
+  it('sincroniza el alta de miembro y membresía como una sola operación', async () => {
+    const composite = {
+      id:'12121212-1212-4212-8212-121212121212',
+      type:'MEMBER_CREATE_WITH_MEMBERSHIP' as const,
+      entityId:'23232323-2323-4232-8232-232323232323',
+      occurredAt:operation.occurredAt,
+      payload:{
+        member:{ ci:'90010112345', firstName:'Ana', lastName:'Pérez', qrCode:'34343434-3434-4434-8434-343434343434' },
+        membership:{ planId:'45454545-4545-4454-8454-454545454545', clientMembershipId:'56565656-5656-4565-8565-565656565656', clientPaymentId:'67676767-6767-4676-8676-676767676767' },
+      },
+    };
+    const prisma = { syncReceipt:{
+      findUnique:jest.fn().mockResolvedValue(null),
+      upsert:jest.fn().mockImplementation(({ create }) => ({ ...create, result:create.result ?? null, message:create.message ?? null })),
+    } };
+    const membership={id:composite.payload.membership.clientMembershipId,payment:{id:composite.payload.membership.clientPaymentId}};
+    const mini={createMemberWithMembership:jest.fn().mockResolvedValue({member:{id:composite.entityId},membership,merged:false})};
+    const service=new SyncService(prisma as never,mini as never,{} as never);
+
+    const response=await service.push({operations:[composite]},user);
+
+    expect(response.results[0]).toMatchObject({status:'APPLIED',result:{id:composite.entityId,membershipId:membership.id,paymentId:membership.payment.id}});
+    expect(mini.createMemberWithMembership).toHaveBeenCalledWith(expect.objectContaining({
+      member:expect.objectContaining({clientId:composite.entityId}),
+      membership:expect.objectContaining({clientMutationId:composite.id}),
+    }),user,true);
+  });
+
   it('sincroniza la edición offline de una membresía', async () => {
     const updateOperation = {
       id: '88888888-8888-4888-8888-888888888888',
@@ -151,5 +179,25 @@ describe('SyncService', () => {
 
     expect(response.results[0].status).toBe('APPLIED');
     expect(mini.deletePlan).toHaveBeenCalledWith(deleteOperation.entityId, user);
+  });
+
+  it('rechaza operaciones administrativas enviadas por una recepcionista', async () => {
+    const receptionist = { ...user, role:'RECEPTIONIST' as const };
+    const deleteOperation = {
+      id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      type:'PLAN_DELETE' as const,
+      entityId:'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      occurredAt:operation.occurredAt,
+      payload:{},
+    };
+    const prisma = { syncReceipt:{
+      findUnique:jest.fn().mockResolvedValue(null),
+      upsert:jest.fn().mockImplementation(({ create }) => ({ ...create, result:create.result ?? null, message:create.message ?? null })),
+    } };
+    const mini = { deletePlan:jest.fn() };
+    const service = new SyncService(prisma as never, mini as never, {} as never);
+    const response = await service.push({ operations:[deleteOperation] }, receptionist);
+    expect(response.results[0]).toMatchObject({ status:'REJECTED', message:'Tu rol no permite realizar esta operación' });
+    expect(mini.deletePlan).not.toHaveBeenCalled();
   });
 });

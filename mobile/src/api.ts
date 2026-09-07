@@ -1,13 +1,18 @@
 import * as SecureStore from 'expo-secure-store';
 import * as Application from 'expo-application';
 import { Platform } from 'react-native';
-import type { Dashboard, Member, Payment, Plan, SyncOperation, SyncResult, SyncSnapshot, User } from './types';
+import type { Dashboard, Member, Payment, Plan, StaffAccount, SyncOperation, SyncResult, SyncSnapshot, User } from './types';
 
 const BASE_URL = `${process.env.EXPO_PUBLIC_API_URL ?? 'http://10.0.2.2:3100'}/api`;
 const TOKEN_KEY = 'gymflow_mini_token';
 const SESSION_KEY = 'gymflow_mini_offline_session';
 const DEVICE_KEY = 'gymflow_mini_installation_id';
 const OFFLINE_SESSION_MS = 14 * 24 * 60 * 60 * 1000;
+let unauthorizedHandler: (() => void) | undefined;
+
+export function setUnauthorizedHandler(handler?: () => void) {
+  unauthorizedHandler = handler;
+}
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string) { super(message); }
@@ -21,7 +26,13 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     headers: { ...(!multipart ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options?.headers },
   });
   const data = await response.json().catch(() => null);
-  if (!response.ok) throw new ApiError(Array.isArray(data?.message) ? data.message.join(', ') : data?.message ?? 'No se pudo completar la operación', response.status, typeof data?.code === 'string' ? data.code : undefined);
+  if (!response.ok) {
+    if (response.status === 401 && token) {
+      await Promise.all([SecureStore.deleteItemAsync(TOKEN_KEY), SecureStore.deleteItemAsync(SESSION_KEY)]);
+      unauthorizedHandler?.();
+    }
+    throw new ApiError(Array.isArray(data?.message) ? data.message.join(', ') : data?.message ?? 'No se pudo completar la operación', response.status, typeof data?.code === 'string' ? data.code : undefined);
+  }
   return data as T;
 }
 
@@ -50,12 +61,12 @@ async function persistSession(result: { accessToken?: string; user: User }) {
 export const api = {
   login: async (email: string, password: string) => {
     const result = await request<{ accessToken: string; user: User }>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
-    if (result.user.role !== 'ADMIN') throw new Error('Esta aplicación es exclusiva para administradores de gimnasio');
+    if (result.user.role !== 'ADMIN' && result.user.role !== 'RECEPTIONIST') throw new Error('Esta aplicación es exclusiva para el personal del gimnasio');
     return persistSession(result);
   },
   googleLogin: async (idToken: string) => {
     const result = await request<{ accessToken: string; user: User }>('/auth/google', { method: 'POST', body: JSON.stringify({ idToken }) });
-    if (result.user.role !== 'ADMIN') throw new Error('Esta aplicación es exclusiva para administradores de gimnasio');
+    if (result.user.role !== 'ADMIN' && result.user.role !== 'RECEPTIONIST') throw new Error('Esta aplicación es exclusiva para el personal del gimnasio');
     return persistSession(result);
   },
   forgotPassword: (email: string) => request<{ message: string }>('/auth/password/forgot', { method: 'POST', body: JSON.stringify({ email }) }),
@@ -64,15 +75,15 @@ export const api = {
     const result = await request<{ accessToken: string; user: User }>('/auth/password/change', { method: 'POST', body: JSON.stringify(input) });
     return persistSession(result);
   },
-  register: async (input: { ownerName: string; gymName: string; province?: string; phone: string; email: string; password: string }) => {
+  register: async (input: { ownerName: string; gymName: string; province: string; municipality: string; phone: string; email: string; password: string }) => {
     const result = await request<{ accessToken: string; user: User } | { verificationRequired: true; email: string; message: string; retryAfterSeconds: number }>('/auth/register', { method: 'POST', body: JSON.stringify({ ...input, deviceId: await deviceId() }) });
     if ('verificationRequired' in result) return result;
     return { verificationRequired:false as const, user:await persistSession(result) };
   },
   verifyEmail: async (email: string, code: string) => persistSession(await request<{ accessToken: string; user: User }>('/auth/email/verify', { method:'POST', body:JSON.stringify({ email, code }) })),
   resendEmailVerification: (email: string) => request<{ message:string; retryAfterSeconds:number }>('/auth/email/resend', { method:'POST', body:JSON.stringify({ email }) }),
-  selectSubscription: async (plan: 'TRIAL' | 'MONTHLY' | 'ANNUAL') => {
-    const result = await request<{ user: User }>('/auth/subscription', { method: 'POST', body: JSON.stringify({ plan, deviceId: await deviceId() }) });
+  selectSubscription: async (plan: 'TRIAL' | 'MONTHLY' | 'ANNUAL', action: 'ACTIVATE' | 'RENEW' | 'CHANGE') => {
+    const result = await request<{ user: User }>('/auth/subscription', { method: 'POST', body: JSON.stringify({ plan, action, deviceId: await deviceId() }) });
     return persistSession(result);
   },
   refreshProfile: async () => persistSession({ user: await request<User>('/auth/me') }),
@@ -95,6 +106,10 @@ export const api = {
   },
   logout: async () => { await SecureStore.deleteItemAsync(TOKEN_KEY); await SecureStore.deleteItemAsync(SESSION_KEY); },
   dashboard: () => request<Dashboard>('/dashboard'),
+  staff: () => request<StaffAccount[]>('/staff'),
+  createStaff: (input: { name: string; email: string; password: string }) => request<StaffAccount>('/staff', { method: 'POST', body: JSON.stringify(input) }),
+  updateStaff: (id: string, input: { name?: string; email?: string; password?: string; isActive?: boolean }) => request<StaffAccount>(`/staff/${id}`, { method: 'PATCH', body: JSON.stringify(input) }),
+  deleteStaff: (id: string) => request<{ id: string; disposition: 'DELETED' | 'ARCHIVED' }>(`/staff/${id}`, { method: 'DELETE' }),
   members: () => request<Member[]>('/members'),
   createMember: (input: Pick<Member, 'ci' | 'firstName' | 'lastName'> & Partial<Pick<Member, 'code' | 'age' | 'sex' | 'phone' | 'address'>>) => request<Member>('/members', { method: 'POST', body: JSON.stringify(input) }),
   memberPhotoSource: async (member: Pick<Member, 'id' | 'photoUpdatedAt'>) => {

@@ -5,7 +5,8 @@ import { IsArray, IsBoolean, IsDateString, IsEmail, IsEnum, IsIn, IsInt, IsNumbe
 export class CreateGymDto {
   @IsString() @MaxLength(100) name: string;
   @IsString() @MaxLength(80) slug: string;
-  @IsOptional() @IsString() province?: string;
+  @IsString() @MaxLength(100) province: string;
+  @IsString() @MaxLength(100) municipality: string;
   @IsOptional() @IsString() phone?: string;
   @IsIn(['CUP', 'USD']) currency: 'CUP' | 'USD';
   @IsEmail() adminEmail: string;
@@ -30,6 +31,7 @@ export class UpdateGymDto {
   @IsOptional() @IsString() @MaxLength(100) name?: string;
   @IsOptional() @IsString() @MaxLength(80) @Matches(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, { message: 'El identificador solo admite minúsculas, números y guiones' }) slug?: string;
   @IsOptional() @IsString() @MaxLength(100) province?: string;
+  @IsOptional() @IsString() @MaxLength(100) municipality?: string;
   @IsOptional() @IsString() @MaxLength(30) phone?: string;
   @IsOptional() @IsIn(['CUP', 'USD']) currency?: 'CUP' | 'USD';
   @IsOptional() @IsBoolean() isActive?: boolean;
@@ -43,6 +45,19 @@ export class CreateGymAdminDto {
 }
 
 export class UpdateGymAdminDto {
+  @IsOptional() @IsString() @MaxLength(100) name?: string;
+  @IsOptional() @IsEmail() email?: string;
+  @IsOptional() @IsString() @MinLength(8) password?: string;
+  @IsOptional() @IsBoolean() isActive?: boolean;
+}
+
+export class CreateStaffAccountDto {
+  @IsString() @MaxLength(100) name: string;
+  @IsEmail() email: string;
+  @IsString() @MinLength(8) password: string;
+}
+
+export class UpdateStaffAccountDto {
   @IsOptional() @IsString() @MaxLength(100) name?: string;
   @IsOptional() @IsEmail() email?: string;
   @IsOptional() @IsString() @MinLength(8) password?: string;
@@ -77,7 +92,6 @@ export class UpdateMemberDto {
   @IsOptional() @IsIn(['MALE', 'FEMALE', 'OTHER']) sex?: 'MALE' | 'FEMALE' | 'OTHER' | null;
   @IsOptional() @IsString() @MaxLength(30) phone?: string;
   @IsOptional() @IsString() @MaxLength(180) address?: string;
-  @IsOptional() @IsEnum(['ACTIVE', 'INACTIVE']) status?: 'ACTIVE' | 'INACTIVE';
 }
 
 export class CreatePlanDto {
@@ -123,6 +137,16 @@ export class AssignGymMembershipDto {
   @IsOptional() @IsString() @MaxLength(100) reference?: string;
 }
 
+export class CreateMemberWithMembershipDto {
+  @ValidateNested()
+  @Type(() => CreateMemberDto)
+  member: CreateMemberDto;
+
+  @ValidateNested()
+  @Type(() => AssignGymMembershipDto)
+  membership: AssignGymMembershipDto;
+}
+
 export class UpdateGymMembershipDto {
   @IsOptional() @IsString() planId?: string;
   @IsOptional() @IsDateString() startDate?: string;
@@ -151,7 +175,7 @@ export class ApplyPaymentDto {
 }
 
 export const SYNC_OPERATION_TYPES = [
-  'MEMBER_CREATE', 'MEMBER_UPDATE', 'MEMBER_DELETE', 'PLAN_CREATE', 'PLAN_UPDATE', 'PLAN_DELETE',
+  'MEMBER_CREATE', 'MEMBER_CREATE_WITH_MEMBERSHIP', 'MEMBER_UPDATE', 'MEMBER_DELETE', 'PLAN_CREATE', 'PLAN_UPDATE', 'PLAN_DELETE',
   'MEMBERSHIP_ASSIGN', 'MEMBERSHIP_UPDATE', 'MEMBERSHIP_RENEW', 'MEMBERSHIP_DELETE', 'PAYMENT_APPLY',
   'ATTENDANCE_CHECK_IN', 'ATTENDANCE_CHECK_OUT',
 ] as const;

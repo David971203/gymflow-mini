@@ -8,6 +8,11 @@ const TOKEN_KEY = 'gymflow_mini_token';
 const SESSION_KEY = 'gymflow_mini_offline_session';
 const DEVICE_KEY = 'gymflow_mini_installation_id';
 const OFFLINE_SESSION_MS = 14 * 24 * 60 * 60 * 1000;
+let unauthorizedHandler: (() => void) | undefined;
+
+export function setUnauthorizedHandler(handler?: () => void) {
+  unauthorizedHandler = handler;
+}
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string) { super(message); }
@@ -21,7 +26,13 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     headers: { ...(!multipart ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options?.headers },
   });
   const data = await response.json().catch(() => null);
-  if (!response.ok) throw new ApiError(Array.isArray(data?.message) ? data.message.join(', ') : data?.message ?? 'No se pudo completar la operación', response.status, typeof data?.code === 'string' ? data.code : undefined);
+  if (!response.ok) {
+    if (response.status === 401 && token) {
+      await Promise.all([SecureStore.deleteItemAsync(TOKEN_KEY), SecureStore.deleteItemAsync(SESSION_KEY)]);
+      unauthorizedHandler?.();
+    }
+    throw new ApiError(Array.isArray(data?.message) ? data.message.join(', ') : data?.message ?? 'No se pudo completar la operación', response.status, typeof data?.code === 'string' ? data.code : undefined);
+  }
   return data as T;
 }
 

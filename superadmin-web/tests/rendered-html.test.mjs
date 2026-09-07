@@ -46,7 +46,7 @@ test("keeps the product metadata and API integration configured", async () => {
 
   assert.match(page, /NEXT_PUBLIC_API_URL/);
   assert.match(page, /\/platform\/overview/);
-  assert.match(page, /aria-label="Buscar solicitudes de planes"/);
+  assert.match(page, /aria-label="Buscar solicitudes de suscripción"/);
   assert.match(page, /filteredRequests/);
   assert.match(page, /\/platform\/gyms/);
   assert.match(page, /\/admins/);
@@ -73,7 +73,7 @@ test("keeps the product metadata and API integration configured", async () => {
   assert.match(page, />Eliminar<\/button>/);
   assert.match(page, /Eliminar registro/);
   assert.match(page, /confirm-backdrop/);
-  assert.doesNotMatch(page, /window\.confirm/);
+  assert.match(page, /request\.plan === "TRIAL".*window\.confirm/);
   assert.doesNotMatch(page, /Si tiene historial en GymFlow/);
   assert.match(page, /tone:\s*"success"/);
   assert.match(page, /tone:\s*"error"/);

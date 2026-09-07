@@ -36,8 +36,10 @@ Incluye:
 - Cobro creado automáticamente al adquirir o renovar un plan.
 - Pagos pendientes, parciales, vencidos y pagados.
 - Abonos sin sobrepago y ledger de movimientos reales.
-- Indicadores de miembros, membresías activas, ingresos cobrados y deuda.
+- Indicadores de miembros, membresías activas, ingresos cobrados, por cobrar hoy, deuda vencida y saldo futuro.
 - Separación estricta entre gimnasios.
+
+El estado activo/inactivo de un miembro no se edita directamente: se deriva de sus membresías vigentes. En finanzas, “por cobrar hoy” incluye lo vencido y lo que vence en la fecha actual; “deuda vencida” es solo lo anterior a hoy; “saldo futuro” aún no es exigible; y “saldo pendiente total” suma todos los importes no completados.
 
 No incluye en esta prueba: miembros con cuenta propia, entrenadores, rutinas, clases ni reservas.
 
@@ -83,10 +85,11 @@ Pantalla Android
 - `local_cache` guarda los snapshots de miembros, planes y pagos por `gymId`.
 - `sync_outbox` es una cola durable con estados `PENDING` y `REJECTED`. Cerrar la app o reiniciar el teléfono no pierde operaciones.
 - Cada creación genera UUID locales; cada mutación lleva un UUID idempotente. Reenviar el mismo lote no crea otra membresía ni duplica un movimiento financiero.
+- El alta inicial de un miembro, su membresía y su cobro viaja como una sola operación compuesta y se confirma en una única transacción del servidor.
 - La sincronización ocurre al iniciar, volver la app al primer plano, recuperar red, arrastrar para refrescar o tocar la barra de estado.
 - Los lotes se envían en orden, de 100 operaciones, hasta vaciar la cola. Después se descarga un snapshot completo; para el volumen del piloto es más simple y verificable que un cursor incremental.
 - Mientras hay una sincronización activa, una nueva escritura local espera a que termine. Así el snapshot no puede pisar una acción recién realizada.
-- Un rechazo afecta solo a su operación. La barra muestra una bandeja de incidencias que permite leer el motivo y descartar el aviso; el resto continúa sincronizando.
+- Un rechazo afecta solo a su operación. La acción que lo originó no muestra una confirmación de éxito: presenta el motivo concreto. Si no hay conexión, informa que el cambio quedó guardado localmente y pendiente de confirmación. La barra muestra una bandeja de incidencias que permite leer el motivo y descartar el aviso; el resto continúa sincronizando.
 
 ### Conflictos y CI duplicado
 

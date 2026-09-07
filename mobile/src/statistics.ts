@@ -1,5 +1,5 @@
 import type { Member, Payment, Plan } from './types';
-import { isMembershipDayBefore, membershipIsCurrent } from './membershipDates';
+import { isMembershipDayBefore, isMembershipDayOnOrBefore, membershipIsCurrent } from './membershipDates';
 
 export type StatisticBar = { id: string; label: string; value: number };
 export type PlanStatistic = { id: string; name: string; contracted: number; active: number; revenue: number; averagePrice: number };
@@ -8,7 +8,7 @@ export type ClientDebtStatistic = { id: string; name: string; amount: number; pa
 export type GymStatistics = {
   growth: { currentMonth: number; previousMonth: number; variation: number | null; activeMembers: number; inactiveMembers: number; validMemberships: number; monthly: StatisticBar[] };
   plans: PlanStatistic[];
-  clients: { ages: StatisticBar[]; sexes: StatisticBar[]; withoutAge: number; topPayments: ClientPaymentStatistic[]; debts: ClientDebtStatistic[]; totalDebt: number };
+  clients: { ages: StatisticBar[]; sexes: StatisticBar[]; withoutAge: number; topPayments: ClientPaymentStatistic[]; debts: ClientDebtStatistic[]; totalDebt: number; futureDebt: number };
 };
 
 function finite(value: string | number | undefined | null) {
@@ -95,6 +95,7 @@ export function calculateGymStatistics(members: Member[], payments: Payment[], n
   ];
   const paymentHistory = new Map<string, ClientPaymentStatistic>();
   const debtHistory = new Map<string, ClientDebtStatistic>();
+  let futureDebt = 0;
   for (const payment of payments) {
     const name = `${payment.member.firstName} ${payment.member.lastName}`.trim();
     const paid = payment.movements.reduce((sum, movement) => sum + finite(movement.amount), 0);
@@ -104,6 +105,10 @@ export function calculateGymStatistics(members: Member[], payments: Payment[], n
     paymentHistory.set(payment.member.id, history);
     const balance = Math.max(0, finite(payment.amount) - finite(payment.paidAmount));
     if (balance <= 0) continue;
+    if (payment.dueDate && !isMembershipDayOnOrBefore(payment.dueDate, now)) {
+      futureDebt += balance;
+      continue;
+    }
     const debt = debtHistory.get(payment.member.id) ?? { id:payment.member.id, name, amount:0, payments:0, overdue:false };
     debt.amount += balance;
     debt.payments += 1;
@@ -115,6 +120,6 @@ export function calculateGymStatistics(members: Member[], payments: Payment[], n
   return {
     growth:{ currentMonth, previousMonth, variation, activeMembers:members.filter(member => member.status === 'ACTIVE').length, inactiveMembers:members.filter(member => member.status !== 'ACTIVE').length, validMemberships:[...uniqueMemberships.values()].filter(payment => membershipIsValid(payment, now)).length, monthly },
     plans,
-    clients:{ ages, sexes, withoutAge, topPayments, debts, totalDebt:debts.reduce((sum, row) => sum + row.amount, 0) },
+    clients:{ ages, sexes, withoutAge, topPayments, debts, totalDebt:debts.reduce((sum, row) => sum + row.amount, 0), futureDebt },
   };
 }

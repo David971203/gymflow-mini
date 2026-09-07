@@ -92,7 +92,6 @@ export class UpdateMemberDto {
   @IsOptional() @IsIn(['MALE', 'FEMALE', 'OTHER']) sex?: 'MALE' | 'FEMALE' | 'OTHER' | null;
   @IsOptional() @IsString() @MaxLength(30) phone?: string;
   @IsOptional() @IsString() @MaxLength(180) address?: string;
-  @IsOptional() @IsEnum(['ACTIVE', 'INACTIVE']) status?: 'ACTIVE' | 'INACTIVE';
 }
 
 export class CreatePlanDto {
@@ -138,6 +137,16 @@ export class AssignGymMembershipDto {
   @IsOptional() @IsString() @MaxLength(100) reference?: string;
 }
 
+export class CreateMemberWithMembershipDto {
+  @ValidateNested()
+  @Type(() => CreateMemberDto)
+  member: CreateMemberDto;
+
+  @ValidateNested()
+  @Type(() => AssignGymMembershipDto)
+  membership: AssignGymMembershipDto;
+}
+
 export class UpdateGymMembershipDto {
   @IsOptional() @IsString() planId?: string;
   @IsOptional() @IsDateString() startDate?: string;
@@ -166,7 +175,7 @@ export class ApplyPaymentDto {
 }
 
 export const SYNC_OPERATION_TYPES = [
-  'MEMBER_CREATE', 'MEMBER_UPDATE', 'MEMBER_DELETE', 'PLAN_CREATE', 'PLAN_UPDATE', 'PLAN_DELETE',
+  'MEMBER_CREATE', 'MEMBER_CREATE_WITH_MEMBERSHIP', 'MEMBER_UPDATE', 'MEMBER_DELETE', 'PLAN_CREATE', 'PLAN_UPDATE', 'PLAN_DELETE',
   'MEMBERSHIP_ASSIGN', 'MEMBERSHIP_UPDATE', 'MEMBERSHIP_RENEW', 'MEMBERSHIP_DELETE', 'PAYMENT_APPLY',
   'ATTENDANCE_CHECK_IN', 'ATTENDANCE_CHECK_OUT',
 ] as const;

@@ -117,6 +117,7 @@ Los fallos web observados son de red durante la descarga de fuentes mediante `ne
 
 ### 3.8 Notificaciones y experiencia móvil
 
+- Onboarding de tres pantallas mostrado una sola vez antes del primer inicio de sesión, con vista del panel, resumen de funciones, operación offline, progreso, Continuar y Saltar.
 - Notificaciones locales de vencimiento tres días antes y el día del vencimiento.
 - Se reprograman al sincronizar y llevan al miembro correspondiente al tocarlas.
 - No funcionan en Expo Go; requieren build nativo y permiso del sistema.
@@ -271,6 +272,8 @@ Nunca copiar secretos reales a este documento ni confirmarlos en Git. Los IDs p�
 
 Las siguientes funciones se declaran como roadmap, no como funcionalidad ya disponible. Deben priorizarse con evidencia del piloto y sin convertir prematuramente GymFlow Mini en el producto GymFlow completo.
 
+La propuesta detallada para cuentas globales, propietarios con varios gimnasios, invitaciones y roles por gimnasio, planes `BASIC`/`PRO`/`ULTIMATE`, facturación mensual o anual y modos de operación `SIMPLE`/`FULL` está documentada en [`PROPUESTA_CUENTAS_PLANES_Y_MODOS.md`](PROPUESTA_CUENTAS_PLANES_Y_MODOS.md). Su contenido es una hipótesis de producto para validar y no describe funcionalidad implementada.
+
 ### Fase 0 — estabilización para piloto real
 
 1. **Activar y validar asistencia**: exponer la entrada desde navegación, probar cámara/QR en Android e iOS, operación offline, doble escaneo, salida y permisos denegados.
@@ -375,6 +378,6 @@ La señal principal es la retención operativa: que administración y recepción
 
 ### Personal y acceso: navegación móvil
 
-- Entrada Personal y acceso dentro de Cuenta, exclusiva de administradores; abre una pantalla propia con regreso a Cuenta. No aparece en la barra de pestañas.
+- La entrada Personal y acceso dentro de Cuenta está oculta por `SHOW_STAFF_ENTRY = false`. Su pantalla y lógica se conservan para reactivarlas durante el piloto; no aparece en la barra de pestañas.
 - Navegación interna por Recepción, Administración y Entrenadores. Recepción permite crear, editar, desactivar y eliminar cuentas con los permisos existentes; Administración conserva la solicitud por WhatsApp a soporte.
 - Entrenadores muestra Próximamente: su sección de interfaz está reservada, pero no se ha creado un rol autenticable ni se han concedido permisos. Su incorporación requerirá modelo, API y permisos propios.

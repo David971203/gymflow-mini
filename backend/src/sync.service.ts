@@ -8,6 +8,7 @@ import { AttendanceService } from './attendance.service';
 import {
   ApplyPaymentDto,
   CreateMemberDto,
+  CreateMemberWithMembershipDto,
   CreateMembershipDto,
   CreatePlanDto,
   RenewMembershipDto,
@@ -107,6 +108,14 @@ export class SyncService {
           if (!member) throw error;
           return { status: 'MERGED', result: { id: member.id, duplicateClientId: operation.entityId } };
         }
+      }
+      case 'MEMBER_CREATE_WITH_MEMBERSHIP': {
+        const dto = await this.payload(CreateMemberWithMembershipDto, {
+          member: { ...(operation.payload.member as Record<string, unknown>), clientId: operation.entityId, occurredAt: operation.occurredAt },
+          membership: { ...(operation.payload.membership as Record<string, unknown>), clientMutationId: operation.id, occurredAt: operation.occurredAt },
+        });
+        const result = await this.mini.createMemberWithMembership(dto, user, true);
+        return { status: result.merged ? 'MERGED' : 'APPLIED', result: { id: result.member.id, membershipId: result.membership.id, paymentId: result.membership.payment?.id ?? null } };
       }
       case 'MEMBER_UPDATE': {
         const dto = await this.payload(UpdateMemberDto, operation.payload);

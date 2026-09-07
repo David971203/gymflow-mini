@@ -5,7 +5,7 @@ import { UserRole } from '@prisma/client';
 import type { Response } from 'express';
 import { CurrentUser, Roles, type AuthUser } from './common';
 import { MiniService } from './mini.service';
-import { ApplyPaymentDto, AssignGymMembershipDto, CreateGymAdminDto, CreateGymDto, CreateMemberDto, CreateMembershipDto, CreatePlanDto, CreateStaffAccountDto, RenewMembershipDto, ResolveSubscriptionRequestDto, UpdateGymAdminDto, UpdateGymDto, UpdateGymMembershipDto, UpdateGymStatusDto, UpdateGymSubscriptionDto, UpdateMemberDto, UpdatePlanDto, UpdateStaffAccountDto } from './mini.dto';
+import { ApplyPaymentDto, AssignGymMembershipDto, CreateGymAdminDto, CreateGymDto, CreateMemberDto, CreateMemberWithMembershipDto, CreateMembershipDto, CreatePlanDto, CreateStaffAccountDto, RenewMembershipDto, ResolveSubscriptionRequestDto, UpdateGymAdminDto, UpdateGymDto, UpdateGymMembershipDto, UpdateGymStatusDto, UpdateGymSubscriptionDto, UpdateMemberDto, UpdatePlanDto, UpdateStaffAccountDto } from './mini.dto';
 
 @ApiTags('super-admin')
 @Controller('platform')
@@ -34,6 +34,7 @@ export class PlatformController {
   @Delete('gyms/:gymId/plans/:id') deletePlan(@Param('gymId') gymId: string, @Param('id') id: string) { return this.mini.deleteGymPlan(gymId, id); }
   @Get('gyms/:gymId/members') gymMembers(@Param('gymId') gymId: string, @Query('search') search?: string) { return this.mini.listGymMembers(gymId, search); }
   @Post('gyms/:gymId/members') createGymMember(@Param('gymId') gymId: string, @Body() dto: CreateMemberDto) { return this.mini.createGymMember(gymId, dto); }
+  @Post('gyms/:gymId/members-with-membership') createGymMemberWithMembership(@Param('gymId') gymId: string, @Body() dto: CreateMemberWithMembershipDto, @CurrentUser() user: AuthUser) { return this.mini.createGymMemberWithMembership(gymId, dto, user); }
   @Patch('gyms/:gymId/members/:id') updateGymMember(@Param('gymId') gymId: string, @Param('id') id: string, @Body() dto: UpdateMemberDto) { return this.mini.updateGymMember(gymId, id, dto); }
   @Delete('gyms/:gymId/members/:id') deleteGymMember(@Param('gymId') gymId: string, @Param('id') id: string) { return this.mini.deleteGymMember(gymId, id); }
   @Get('gyms/:gymId/members/:memberId/memberships') gymMemberships(@Param('gymId') gymId: string, @Param('memberId') memberId: string) { return this.mini.listGymMemberships(gymId, memberId); }

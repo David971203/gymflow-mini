@@ -131,6 +131,8 @@ export const offline = {
       if (!payment.dueDate) return true;
       return isMembershipDayOnOrBefore(payment.dueDate, now);
     });
+    const overduePayments = duePayments.filter((payment) => !!payment.dueDate && isMembershipDayBefore(payment.dueDate, now));
+    const futurePayments = payments.filter((payment) => !!payment.dueDate && !isMembershipDayOnOrBefore(payment.dueDate, now));
     const movements = payments.flatMap((payment) => payment.movements.map((movement) => ({ ...movement, payment: { member: payment.member } })));
     const monthly = movements.filter((movement) => { const date = new Date(movement.occurredAt); return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth(); });
     const activeMemberships = members.reduce((total, member) => total + member.memberships.filter((membership) => membershipIsCurrent(membership, now)).length, 0);
@@ -139,6 +141,8 @@ export const offline = {
       activeMemberships,
       monthlyRevenue: Number(monthly.reduce((sum, movement) => sum + Number(movement.amount), 0).toFixed(2)),
       pendingDebt: Number(duePayments.reduce((sum, payment) => sum + Math.max(0, Number(payment.amount) - Number(payment.paidAmount)), 0).toFixed(2)),
+      overdueDebt: Number(overduePayments.reduce((sum, payment) => sum + Math.max(0, Number(payment.amount) - Number(payment.paidAmount)), 0).toFixed(2)),
+      futureDebt: Number(futurePayments.reduce((sum, payment) => sum + Math.max(0, Number(payment.amount) - Number(payment.paidAmount)), 0).toFixed(2)),
       recentPayments: monthly.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt)).slice(0, 5),
     };
   },
@@ -151,7 +155,7 @@ export const offline = {
       const members = await offline.members(scope);
       if (members.some((member) => member.ci === input.ci)) throw new Error('Ya existe un miembro local con ese carnet de identidad');
       if (input.code && members.some((member) => member.code === input.code)) throw new Error('Ya existe un miembro local con ese código interno');
-      members.unshift({ id, qrCode, ...input, status: 'ACTIVE', joinedAt: occurredAt, memberships: [] });
+      members.unshift({ id, qrCode, ...input, status: 'INACTIVE', joinedAt: occurredAt, memberships: [] });
       await writeCache(scope, 'members', members);
       await enqueue(scope, { id: operationId, type: 'MEMBER_CREATE', entityId: id, payload: { ...input, qrCode }, occurredAt });
     });
@@ -159,7 +163,45 @@ export const offline = {
     return id;
   },
 
-  async updateMember(scope: string, id: string, input: Partial<Pick<Member, 'ci' | 'code' | 'firstName' | 'lastName' | 'age' | 'sex' | 'phone' | 'address' | 'status'>>) {
+  async createMemberWithMembership(
+    scope: string,
+    input: Pick<Member, 'ci' | 'firstName' | 'lastName'> & Partial<Pick<Member, 'code' | 'age' | 'sex' | 'phone' | 'address'>>,
+    membershipInput: { planId: string; periodCount?: number; initialPayment?: number; paymentMethod?: string },
+  ) {
+    await waitForActiveSync(scope);
+    const database = await db();
+    const memberId = uuid(); const qrCode = uuid(); const membershipId = uuid(); const paymentId = uuid(); const operationId = uuid(); const occurredAt = new Date().toISOString();
+    await database.withTransactionAsync(async () => {
+      const [members, plans, payments] = await Promise.all([offline.members(scope), offline.plans(scope), offline.payments(scope)]);
+      if (members.some((member) => member.ci === input.ci)) throw new Error('Ya existe un miembro local con ese carnet de identidad');
+      if (input.code && members.some((member) => member.code === input.code)) throw new Error('Ya existe un miembro local con ese código interno');
+      const plan = plans.find((item) => item.id === membershipInput.planId && item.isActive);
+      if (!plan) throw new Error('No se encontró el plan activo en este dispositivo');
+      const periodCount = membershipInput.periodCount ?? 1;
+      if (!Number.isInteger(periodCount) || periodCount < 1 || periodCount > 24) throw new Error('La cantidad de períodos debe ser un número entero entre 1 y 24');
+      const initial = membershipInput.initialPayment ?? 0; const total = Number(plan.price) * periodCount;
+      if (initial > total) throw new Error('El abono inicial supera el precio del plan');
+      const startDate = new Date(); const endDate = new Date(startDate); endDate.setDate(endDate.getDate() + plan.durationDays * periodCount);
+      const paymentStatus = initial === 0 ? 'PENDING' : initial >= total ? 'PAID' : 'PARTIAL';
+      const membership: Membership = { id:membershipId, status:'ACTIVE', startDate:startDate.toISOString(), endDate:endDate.toISOString(), periodCount, plan, planName:plan.name, planPrice:plan.price, planDurationDays:plan.durationDays };
+      const member: Member = { id:memberId, qrCode, ...input, status:'ACTIVE', joinedAt:occurredAt, memberships:[membership] };
+      const movements: Movement[] = initial > 0 ? [{ id:operationId, amount:String(initial), occurredAt }] : [];
+      const payment: Payment = { id:paymentId, amount:String(total), paidAmount:String(initial), status:paymentStatus, createdAt:occurredAt, dueDate:startDate.toISOString(), member, membership:{ ...membership }, movements };
+      members.unshift(member); payments.unshift(payment);
+      await writeCache(scope, 'members', members); await writeCache(scope, 'payments', payments);
+      await enqueue(scope, {
+        id:operationId,
+        type:'MEMBER_CREATE_WITH_MEMBERSHIP',
+        entityId:memberId,
+        payload:{ member:{ ...input, qrCode }, membership:{ ...membershipInput, clientMembershipId:membershipId, clientPaymentId:paymentId } },
+        occurredAt,
+      });
+    });
+    await updateState(scope, 'OFFLINE'); emit(); void syncNow(scope);
+    return { memberId, operationId };
+  },
+
+  async updateMember(scope: string, id: string, input: Partial<Pick<Member, 'ci' | 'code' | 'firstName' | 'lastName' | 'age' | 'sex' | 'phone' | 'address'>>) {
     await waitForActiveSync(scope);
     const database = await db(); const operationId = uuid(); const occurredAt = new Date().toISOString();
     await database.withTransactionAsync(async () => {
@@ -170,6 +212,7 @@ export const offline = {
       await enqueue(scope, { id: operationId, type: 'MEMBER_UPDATE', entityId: id, payload: input, occurredAt });
     });
     await updateState(scope, 'OFFLINE'); emit(); void syncNow(scope);
+    return operationId;
   },
 
   async deleteMember(scope: string, id: string) {
@@ -198,6 +241,7 @@ export const offline = {
       await enqueue(scope, { id: operationId, type: 'MEMBER_DELETE', entityId: id, payload: {}, occurredAt });
     });
     await updateState(scope, 'OFFLINE'); emit(); void syncNow(scope);
+    return operationId;
   },
 
   async createPlan(scope: string, input: { name: string; price: number; durationDays: number }) {
@@ -224,6 +268,7 @@ export const offline = {
       await enqueue(scope, { id: operationId, type: 'PLAN_UPDATE', entityId: id, payload: input, occurredAt });
     });
     await updateState(scope, 'OFFLINE'); emit(); void syncNow(scope);
+    return operationId;
   },
 
   async deletePlan(scope: string, id: string) {
@@ -266,7 +311,7 @@ export const offline = {
       await enqueue(scope, { id: operationId, type: 'MEMBERSHIP_ASSIGN', entityId: membershipId, payload: { ...input, clientPaymentId: paymentId }, occurredAt });
     });
     await updateState(scope, 'OFFLINE'); emit(); void syncNow(scope);
-    return membershipId;
+    return { membershipId, operationId };
   },
 
   async updateMembership(scope: string, memberId: string, membershipId: string, input: { planId: string; status: string }) {
@@ -307,6 +352,7 @@ export const offline = {
       await enqueue(scope, { id: operationId, type: 'MEMBERSHIP_UPDATE', entityId: membershipId, payload: input, occurredAt });
     });
     await updateState(scope, 'OFFLINE'); emit(); void syncNow(scope);
+    return operationId;
   },
 
   async renewMembership(scope: string, memberId: string, currentMembershipId: string, input: { planId: string; periodCount?: number; initialPayment?: number; paymentMethod?: string }) {
@@ -334,7 +380,7 @@ export const offline = {
       await enqueue(scope, { id: operationId, type: 'MEMBERSHIP_RENEW', entityId: currentMembershipId, payload: { ...input, clientMembershipId: membershipId, clientPaymentId: paymentId }, occurredAt });
     });
     await updateState(scope, 'OFFLINE'); emit(); void syncNow(scope);
-    return membershipId;
+    return { membershipId, operationId };
   },
 
   async deleteScheduledMembership(scope: string, memberId: string, membershipId: string) {
@@ -357,6 +403,7 @@ export const offline = {
       await enqueue(scope, { id: operationId, type: 'MEMBERSHIP_DELETE', entityId: membershipId, payload: {}, occurredAt });
     });
     await updateState(scope, 'OFFLINE'); emit(); void syncNow(scope);
+    return operationId;
   },
 
   async applyPayment(scope: string, paymentId: string, input: { amount: number; method: string }) {
@@ -374,6 +421,7 @@ export const offline = {
       await enqueue(scope, { id: operationId, type: 'PAYMENT_APPLY', entityId: paymentId, payload: input, occurredAt });
     });
     await updateState(scope, 'OFFLINE'); emit(); void syncNow(scope);
+    return operationId;
   },
 
   async checkIn(scope: string, input: { memberId: string; method: 'QR' | 'MANUAL' }) {
@@ -431,6 +479,16 @@ export async function getSyncIssues(scope: string): Promise<SyncIssue[]> {
 export async function discardSyncIssue(scope: string, id: string) {
   await (await db()).runAsync('DELETE FROM sync_outbox WHERE scope = ? AND id = ? AND status = ?', scope, id, 'REJECTED');
   await updateState(scope, getSyncState(scope).phase); emit();
+}
+
+export async function settleMutation(scope: string, operationId: string): Promise<{ status: 'APPLIED' | 'PENDING' | 'REJECTED'; message?: string }> {
+  await syncNow(scope);
+  const row = await (await db()).getFirstAsync<{ status: 'PENDING' | 'REJECTED'; error: string | null }>(
+    'SELECT status, error FROM sync_outbox WHERE scope = ? AND id = ?', scope, operationId,
+  );
+  if (!row) return { status:'APPLIED' };
+  if (row.status === 'REJECTED') return { status:'REJECTED', message:row.error ?? 'El servidor rechazó el cambio' };
+  return { status:'PENDING' };
 }
 
 async function pendingOperations(scope: string): Promise<SyncOperation[]> {

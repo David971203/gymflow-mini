@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { validate } from 'class-validator';
-import { SyncOperationDto } from './mini.dto';
+import { SyncOperationDto, UpdateMemberDto } from './mini.dto';
 
 describe('SyncOperationDto', () => {
   const operation = (entityId: string) => Object.assign(new SyncOperationDto(), {
@@ -24,5 +24,13 @@ describe('SyncOperationDto', () => {
   it('rechaza un ID de entidad vacío', async () => {
     const errors = await validate(operation(''));
     expect(errors.find(error => error.property === 'entityId')?.constraints).toHaveProperty('minLength');
+  });
+});
+
+describe('UpdateMemberDto', () => {
+  it('rechaza editar manualmente el estado derivado del miembro', async () => {
+    const dto = Object.assign(new UpdateMemberDto(), { firstName:'Ana', status:'INACTIVE' });
+    const errors = await validate(dto, { whitelist:true, forbidNonWhitelisted:true });
+    expect(errors.find(error => error.property === 'status')?.constraints).toHaveProperty('whitelistValidation');
   });
 });

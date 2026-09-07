@@ -3,7 +3,7 @@ import { GymSubscriptionPlan, MembershipStatus, PaymentStatus, Prisma, Subscript
 import * as argon2 from 'argon2';
 import { PrismaService } from './prisma.service';
 import type { AuthUser } from './common';
-import { ApplyPaymentDto, AssignGymMembershipDto, CreateGymAdminDto, CreateGymDto, CreateMemberDto, CreateMembershipDto, CreatePlanDto, CreateStaffAccountDto, RenewMembershipDto, UpdateGymAdminDto, UpdateGymDto, UpdateGymMembershipDto, UpdateMemberDto, UpdatePlanDto, UpdateStaffAccountDto } from './mini.dto';
+import { ApplyPaymentDto, AssignGymMembershipDto, CreateGymAdminDto, CreateGymDto, CreateMemberDto, CreateMemberWithMembershipDto, CreateMembershipDto, CreatePlanDto, CreateStaffAccountDto, RenewMembershipDto, UpdateGymAdminDto, UpdateGymDto, UpdateGymMembershipDto, UpdateMemberDto, UpdatePlanDto, UpdateStaffAccountDto } from './mini.dto';
 import { membershipDayStart, membershipHasExpired, nextMembershipDayStart } from './membership-time';
 import { subscriptionExpiryBoundary, subscriptionIsActiveThroughDay } from './subscription-time';
 import { assertCubanLocation } from './cuba-locations';
@@ -19,6 +19,41 @@ const PLATFORM_SUBSCRIPTION_PRICES: Record<GymSubscriptionPlan, number> = {
   [GymSubscriptionPlan.MONTHLY]: 5000,
   [GymSubscriptionPlan.ANNUAL]: 50000,
 };
+
+type PaymentBalanceRow = { amount: Prisma.Decimal | number | string; paidAmount: Prisma.Decimal | number | string; dueDate?: Date | null };
+
+function summarizePaymentBalances(payments: PaymentBalanceRow[], today = membershipDayStart()) {
+  let outstandingBalance = 0;
+  let dueBalance = 0;
+  let overdueBalance = 0;
+  let futureBalance = 0;
+  let outstandingPayments = 0;
+  let duePayments = 0;
+  let futurePayments = 0;
+  for (const payment of payments) {
+    const balance = Math.max(0, Number(payment.amount) - Number(payment.paidAmount));
+    if (balance <= 0) continue;
+    outstandingBalance += balance;
+    outstandingPayments += 1;
+    if (payment.dueDate && payment.dueDate >= nextMembershipDayStart(today)) {
+      futureBalance += balance;
+      futurePayments += 1;
+      continue;
+    }
+    dueBalance += balance;
+    duePayments += 1;
+    if (payment.dueDate && payment.dueDate < today) overdueBalance += balance;
+  }
+  return {
+    outstandingBalance: Number(outstandingBalance.toFixed(2)),
+    dueBalance: Number(dueBalance.toFixed(2)),
+    overdueBalance: Number(overdueBalance.toFixed(2)),
+    futureBalance: Number(futureBalance.toFixed(2)),
+    outstandingPayments,
+    duePayments,
+    futurePayments,
+  };
+}
 
 @Injectable()
 export class MiniService {
@@ -316,7 +351,107 @@ export class MiniService {
     await this.requireGym(gymId);
     const { clientId, occurredAt, ...data } = dto;
     try {
-      return await this.prisma.member.create({ data: { ...(clientId ? { id: clientId } : {}), ...data, gymId, ...(occurredAt ? { joinedAt: new Date(occurredAt) } : {}) } });
+      return await this.prisma.member.create({ data: { ...(clientId ? { id: clientId } : {}), ...data, gymId, status: 'INACTIVE', ...(occurredAt ? { joinedAt: new Date(occurredAt) } : {}) } });
+    } catch (error) {
+      this.rethrowMemberCiConflict(error);
+    }
+  }
+
+  async createGymMemberWithMembership(gymId: string, dto: CreateMemberWithMembershipDto, user: AuthUser) {
+    await this.requireGym(gymId);
+    return this.createMemberWithMembershipForGym(dto, gymId, user, false);
+  }
+
+  async createMemberWithMembership(dto: CreateMemberWithMembershipDto, user: AuthUser, mergeByCi = false) {
+    return this.createMemberWithMembershipForGym(dto, this.gymId(user), user, mergeByCi);
+  }
+
+  private async createMemberWithMembershipForGym(dto: CreateMemberWithMembershipDto, gymId: string, user: AuthUser, mergeByCi: boolean) {
+    const { member: memberInput, membership: membershipInput } = dto;
+    const { clientId, occurredAt, ...memberData } = memberInput;
+    const periodCount = membershipInput.periodCount ?? 1;
+    if (!Number.isInteger(periodCount) || periodCount < 1 || periodCount > 24) throw new BadRequestException('La cantidad de períodos debe ser un número entero entre 1 y 24');
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        if (membershipInput.clientMutationId) {
+          const repeated = await tx.membership.findUnique({ where: { clientMutationId: membershipInput.clientMutationId }, include: membershipInclude });
+          if (repeated) {
+            if (repeated.member.gymId !== gymId) throw new ConflictException('La operación pertenece a otro gimnasio');
+            return { member: repeated.member, membership: repeated, merged: repeated.member.id !== clientId };
+          }
+        }
+
+        const [plan, existingById, existingByCi] = await Promise.all([
+          tx.plan.findFirst({ where: { id: membershipInput.planId, gymId, isActive: true } }),
+          clientId ? tx.member.findUnique({ where: { id: clientId } }) : Promise.resolve(null),
+          tx.member.findUnique({ where: { gymId_ci: { gymId, ci: memberInput.ci } } }),
+        ]);
+        if (!plan) throw new NotFoundException('Plan activo no encontrado');
+        if (existingById && existingById.gymId !== gymId) throw new ConflictException('El identificador local ya está en uso');
+
+        const now = new Date();
+        const membershipDayBoundary = nextMembershipDayStart(now);
+        const startDate = membershipInput.startDate ? new Date(membershipInput.startDate) : now;
+        const status = startDate >= membershipDayBoundary ? MembershipStatus.SCHEDULED : MembershipStatus.ACTIVE;
+        const existing = existingById ?? existingByCi;
+        if (existing && !mergeByCi) throw new ConflictException('Ya existe un miembro con ese carnet de identidad');
+        const member = existing ?? await tx.member.create({
+          data: { ...(clientId ? { id: clientId } : {}), ...memberData, gymId, status: status === MembershipStatus.ACTIVE ? 'ACTIVE' : 'INACTIVE', ...(occurredAt ? { joinedAt: new Date(occurredAt) } : {}) },
+        });
+
+        const initial = membershipInput.initialPayment ?? 0;
+        const total = Number(plan.price) * periodCount;
+        if (initial > total) throw new BadRequestException('El abono inicial supera el precio del plan');
+        if (initial > 0 && !membershipInput.paymentMethod) throw new BadRequestException('Indica el método del abono inicial');
+
+        const collision = await tx.membership.findFirst({ where: { memberId: member.id, status, ...(status === MembershipStatus.ACTIVE ? { endDate: { gte: membershipDayBoundary } } : {}) } });
+        if (collision) throw new ConflictException(status === MembershipStatus.ACTIVE ? 'El miembro ya tiene una membresía activa' : 'El miembro ya tiene una renovación programada');
+
+        const endDate = new Date(startDate);
+        endDate.setDate(endDate.getDate() + plan.durationDays * periodCount);
+        const membership = await tx.membership.create({ data: {
+          id: membershipInput.clientMembershipId,
+          memberId: member.id,
+          planId: plan.id,
+          planName: plan.name,
+          planPrice: plan.price,
+          planDurationDays: plan.durationDays,
+          startDate,
+          endDate,
+          periodCount,
+          status,
+          clientMutationId: membershipInput.clientMutationId,
+        } });
+        const paymentStatus = initial === 0 ? PaymentStatus.PENDING : initial >= total ? PaymentStatus.PAID : PaymentStatus.PARTIAL;
+        const operationTime = membershipInput.occurredAt ? new Date(membershipInput.occurredAt) : new Date();
+        const payment = await tx.payment.create({ data: {
+          id: membershipInput.clientPaymentId,
+          gymId,
+          memberId: member.id,
+          membershipId: membership.id,
+          amount: total,
+          paidAmount: initial,
+          dueDate: startDate,
+          status: paymentStatus,
+          paidAt: paymentStatus === PaymentStatus.PAID ? operationTime : null,
+        } });
+        if (initial > 0 && membershipInput.paymentMethod) await tx.paymentMovement.create({ data: {
+          paymentId: payment.id,
+          actorUserId: user.id,
+          amount: initial,
+          method: membershipInput.paymentMethod,
+          reference: membershipInput.reference,
+          occurredAt: operationTime,
+          clientMutationId: membershipInput.clientMutationId,
+        } });
+        if (status === MembershipStatus.ACTIVE && member.status !== 'ACTIVE') await tx.member.update({ where: { id: member.id }, data: { status: 'ACTIVE' } });
+        return {
+          member,
+          membership: await tx.membership.findUniqueOrThrow({ where: { id: membership.id }, include: membershipInclude }),
+          merged: Boolean(existing),
+        };
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     } catch (error) {
       this.rethrowMemberCiConflict(error);
     }
@@ -458,7 +593,13 @@ export class MiniService {
     const startDate = dto.startDate ? new Date(dto.startDate) : current.startDate;
     const endDate = dto.endDate ? new Date(dto.endDate) : dto.planId && dto.planId !== current.planId ? new Date(startDate.getTime() + plan.durationDays * current.periodCount * 86400000) : current.endDate;
     if (endDate <= startDate) throw new BadRequestException('La fecha final debe ser posterior a la fecha inicial');
-    const status = dto.status ?? current.status;
+    const status = dto.status === MembershipStatus.CANCELLED || (current.status === MembershipStatus.CANCELLED && dto.status === undefined)
+      ? MembershipStatus.CANCELLED
+      : membershipHasExpired(endDate)
+        ? MembershipStatus.EXPIRED
+        : startDate >= membershipDayBoundary
+          ? MembershipStatus.SCHEDULED
+          : MembershipStatus.ACTIVE;
     if (status === MembershipStatus.ACTIVE) {
       const collision = await this.prisma.membership.findFirst({ where: { id: { not: id }, memberId, status: MembershipStatus.ACTIVE, endDate: { gte: membershipDayBoundary } } });
       if (collision) throw new ConflictException('El miembro ya tiene otra membresía activa');
@@ -479,14 +620,8 @@ export class MiniService {
             : (current.payment.status === PaymentStatus.OVERDUE ? PaymentStatus.OVERDUE : PaymentStatus.PARTIAL);
         await tx.payment.update({ where: { id: current.payment.id }, data: { amount, dueDate: startDate, status: paymentStatus, paidAt: paymentStatus === PaymentStatus.PAID ? current.payment.paidAt ?? new Date() : null } });
       }
-      if (status === MembershipStatus.ACTIVE) {
-        await tx.member.update({ where: { id: memberId }, data: { status: 'ACTIVE' } });
-      } else if (status === MembershipStatus.CANCELLED) {
-        await tx.member.updateMany({
-          where: { id: memberId, memberships: { none: { status: MembershipStatus.ACTIVE, endDate: { gte: membershipDayBoundary } } } },
-          data: { status: 'INACTIVE' },
-        });
-      }
+      const activeMembership = await tx.membership.findFirst({ where: { memberId, status: MembershipStatus.ACTIVE, startDate: { lt: membershipDayBoundary }, endDate: { gte: membershipDayBoundary } }, select: { id: true } });
+      await tx.member.update({ where: { id: memberId }, data: { status: activeMembership ? 'ACTIVE' : 'INACTIVE' } });
       return tx.membership.findUniqueOrThrow({ where: { id: membership.id }, include: membershipInclude });
     });
   }
@@ -496,15 +631,17 @@ export class MiniService {
     const membership = await this.prisma.membership.findFirst({ where: { id, memberId, member: { gymId } }, include: { payment: { include: { movements: true } } } });
     if (!membership) throw new NotFoundException('Membresía no encontrada');
     const hasFinancialHistory = membership.payment && (Number(membership.payment.paidAmount) > 0 || membership.payment.movements.length > 0);
-    if (hasFinancialHistory) {
-      await this.prisma.membership.update({ where: { id }, data: { status: MembershipStatus.CANCELLED } });
-      return { id, disposition: 'ARCHIVED' };
-    }
-    await this.prisma.$transaction(async (tx) => {
-      if (membership.payment) await tx.payment.delete({ where: { id: membership.payment.id } });
-      await tx.membership.delete({ where: { id } });
+    return this.prisma.$transaction(async (tx) => {
+      if (hasFinancialHistory) await tx.membership.update({ where: { id }, data: { status: MembershipStatus.CANCELLED } });
+      else {
+        if (membership.payment) await tx.payment.delete({ where: { id: membership.payment.id } });
+        await tx.membership.delete({ where: { id } });
+      }
+      const boundary = nextMembershipDayStart();
+      const activeMembership = await tx.membership.findFirst({ where: { memberId, status: MembershipStatus.ACTIVE, startDate: { lt: boundary }, endDate: { gte: boundary } }, select: { id: true } });
+      await tx.member.update({ where: { id: memberId }, data: { status: activeMembership ? 'ACTIVE' : 'INACTIVE' } });
+      return { id, disposition: hasFinancialHistory ? 'ARCHIVED' as const : 'DELETED' as const };
     });
-    return { id, disposition: 'DELETED' };
   }
 
   async listGymPayments(gymId: string) {
@@ -522,7 +659,7 @@ export class MiniService {
     await this.prisma.payment.updateMany({ where: { gymId, status: { in: [PaymentStatus.PENDING, PaymentStatus.PARTIAL] }, dueDate: { lt: membershipDayStart() } }, data: { status: PaymentStatus.OVERDUE } });
     const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
     const [payments, monthlyRevenue, recentMovements] = await Promise.all([
-      this.prisma.payment.findMany({ where: { gymId }, select: { amount: true, paidAmount: true, status: true } }),
+      this.prisma.payment.findMany({ where: { gymId }, select: { amount: true, paidAmount: true, status: true, dueDate: true } }),
       this.prisma.paymentMovement.aggregate({ where: { payment: { gymId }, occurredAt: { gte: monthStart } }, _sum: { amount: true } }),
       this.prisma.paymentMovement.findMany({
         where: { payment: { gymId } },
@@ -533,15 +670,18 @@ export class MiniService {
     ]);
     const totalBilled = payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
     const totalCollected = payments.reduce((sum, payment) => sum + Number(payment.paidAmount), 0);
-    const pendingBalance = payments.reduce((sum, payment) => sum + Math.max(0, Number(payment.amount) - Number(payment.paidAmount)), 0);
-    const overdueBalance = payments.reduce((sum, payment) => payment.status === PaymentStatus.OVERDUE ? sum + Math.max(0, Number(payment.amount) - Number(payment.paidAmount)) : sum, 0);
+    const balances = summarizePaymentBalances(payments);
     return {
       totalBilled: Number(totalBilled.toFixed(2)),
       totalCollected: Number(totalCollected.toFixed(2)),
-      pendingBalance: Number(pendingBalance.toFixed(2)),
-      overdueBalance: Number(overdueBalance.toFixed(2)),
+      pendingBalance: balances.outstandingBalance,
+      dueBalance: balances.dueBalance,
+      overdueBalance: balances.overdueBalance,
+      futureBalance: balances.futureBalance,
       monthlyRevenue: Number(monthlyRevenue._sum.amount ?? 0),
-      pendingPayments: payments.filter(payment => Number(payment.amount) > Number(payment.paidAmount)).length,
+      pendingPayments: balances.outstandingPayments,
+      duePayments: balances.duePayments,
+      futurePayments: balances.futurePayments,
       recentMovements,
     };
   }
@@ -563,7 +703,7 @@ export class MiniService {
       this.prisma.member.count({ where: { status: 'ACTIVE' } }),
       this.prisma.member.count({ where: { joinedAt: { gte: start, lt: nextMonth } } }),
       this.prisma.paymentMovement.aggregate({ where: { occurredAt: { gte: start, lt: nextMonth } }, _sum: { amount: true } }),
-      this.prisma.payment.findMany({ where: { status: { not: PaymentStatus.PAID } }, select: { amount: true, paidAmount: true } }),
+      this.prisma.payment.findMany({ where: { status: { not: PaymentStatus.PAID } }, select: { amount: true, paidAmount: true, dueDate: true } }),
       this.prisma.platformSubscription.aggregate({ where: { activatedAt: { gte: start, lt: nextMonth } }, _sum: { amount: true } }),
       this.prisma.platformSubscription.aggregate({ _sum: { amount: true } }),
       this.prisma.gym.count({ where: { ...activeSubscriptionWhere, subscriptionPlan: GymSubscriptionPlan.TRIAL } }),
@@ -574,12 +714,14 @@ export class MiniService {
       this.prisma.subscriptionRequest.count({ where: { status: SubscriptionRequestStatus.PENDING } }),
       ...trendMonths.map(({ monthStart, monthEnd }) => this.prisma.member.count({ where: { joinedAt: { gte: monthStart, lt: monthEnd } } })),
     ]);
-    const debt = debtRows.reduce((sum, row) => sum + Number(row.amount) - Number(row.paidAmount), 0);
+    const balances = summarizePaymentBalances(debtRows);
     const memberTrend = trendMonths.map(({ monthStart }, index) => ({ month: monthStart.toISOString().slice(0, 7), members: memberTrendCounts[index] }));
     return {
       gyms, activeGyms, members, newMembers,
       monthlyRevenue: Number(revenue._sum.amount ?? 0),
-      pendingDebt: Number(debt.toFixed(2)),
+      pendingDebt: balances.dueBalance,
+      overdueDebt: balances.overdueBalance,
+      futureDebt: balances.futureBalance,
       memberTrend,
       subscriptionMonthlyRevenue: Number(subscriptionMonthlyRevenue._sum.amount ?? 0),
       subscriptionTotalRevenue: Number(subscriptionTotalRevenue._sum.amount ?? 0),
@@ -603,7 +745,7 @@ export class MiniService {
       }
     }
     try {
-      return await this.prisma.member.create({ data: { ...(clientId ? { id: clientId } : {}), ...data, gymId, ...(occurredAt ? { joinedAt: new Date(occurredAt) } : {}) } });
+      return await this.prisma.member.create({ data: { ...(clientId ? { id: clientId } : {}), ...data, gymId, status: 'INACTIVE', ...(occurredAt ? { joinedAt: new Date(occurredAt) } : {}) } });
     } catch (error) {
       this.rethrowMemberCiConflict(error);
     }
@@ -810,10 +952,11 @@ export class MiniService {
       this.prisma.member.count({ where: { gymId } }),
       this.prisma.membership.count({ where: { status: MembershipStatus.ACTIVE, endDate: { gte: nextMembershipDayStart() }, member: { gymId } } }),
       this.prisma.paymentMovement.aggregate({ where: { payment: { gymId }, occurredAt: { gte: start, lt: nextMonth } }, _sum: { amount: true } }),
-      this.prisma.payment.findMany({ where: { gymId, status: { not: PaymentStatus.PAID } }, select: { amount: true, paidAmount: true } }),
+      this.prisma.payment.findMany({ where: { gymId, status: { not: PaymentStatus.PAID } }, select: { amount: true, paidAmount: true, dueDate: true } }),
       this.prisma.paymentMovement.findMany({ where: { payment: { gymId }, occurredAt: { gte: start, lt: nextMonth } }, include: { payment: { include: { member: true } } }, orderBy: { occurredAt: 'desc' }, take: 5 }),
     ]);
-    return { members, activeMemberships, monthlyRevenue: Number(revenue._sum.amount ?? 0), pendingDebt: Number(debtRows.reduce((sum, row) => sum + Number(row.amount) - Number(row.paidAmount), 0).toFixed(2)), recentPayments: recent };
+    const balances = summarizePaymentBalances(debtRows);
+    return { members, activeMemberships, monthlyRevenue: Number(revenue._sum.amount ?? 0), pendingDebt: balances.dueBalance, overdueDebt: balances.overdueBalance, futureDebt: balances.futureBalance, recentPayments: recent };
   }
 
   private async requireMember(id: string, user: AuthUser) {

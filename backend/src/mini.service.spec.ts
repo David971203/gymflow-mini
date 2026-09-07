@@ -10,7 +10,7 @@ describe('MiniService', () => {
     const create = jest.fn().mockResolvedValue({ id: 'member-1' });
     const service = new MiniService({ member: { create } } as never);
     await service.createMember({ ci: '90010112345', code: 'SOC-001', firstName: 'Ana', lastName: 'Pérez', age: 29, sex: 'FEMALE' }, user);
-    expect(create).toHaveBeenCalledWith({ data: { ci: '90010112345', code: 'SOC-001', firstName: 'Ana', lastName: 'Pérez', age: 29, sex: 'FEMALE', gymId: 'gym-1' } });
+    expect(create).toHaveBeenCalledWith({ data: { ci: '90010112345', code: 'SOC-001', firstName: 'Ana', lastName: 'Pérez', age: 29, sex: 'FEMALE', gymId: 'gym-1', status:'INACTIVE' } });
   });
 
   it('convierte la restricción única del CI en un conflicto de negocio claro', async () => {
@@ -102,7 +102,33 @@ describe('MiniService', () => {
     const prisma = { gym: { findUnique: jest.fn().mockResolvedValue({ id: 'gym-2' }) }, member: { create } };
     const service = new MiniService(prisma as never);
     await service.createGymMember('gym-2', { ci: '91020212345', firstName: 'Luis', lastName: 'Gómez' });
-    expect(create).toHaveBeenCalledWith({ data: { gymId: 'gym-2', ci: '91020212345', firstName: 'Luis', lastName: 'Gómez' } });
+    expect(create).toHaveBeenCalledWith({ data: { gymId: 'gym-2', ci: '91020212345', firstName: 'Luis', lastName: 'Gómez', status:'INACTIVE' } });
+  });
+
+  it('crea miembro, membresía y cobro inicial dentro de una sola transacción', async () => {
+    const member={id:'member-atomic',gymId:'gym-1',status:'ACTIVE'};
+    const membership={id:'membership-atomic',memberId:member.id};
+    const tx={
+      plan:{findFirst:jest.fn().mockResolvedValue({id:'plan-1',gymId:'gym-1',isActive:true,name:'Mensual',price:1000,durationDays:30})},
+      member:{findUnique:jest.fn().mockResolvedValue(null),create:jest.fn().mockResolvedValue(member),update:jest.fn()},
+      membership:{findUnique:jest.fn().mockResolvedValue(null),findFirst:jest.fn().mockResolvedValue(null),create:jest.fn().mockResolvedValue(membership),findUniqueOrThrow:jest.fn().mockResolvedValue({...membership,member,payment:{id:'payment-atomic'}})},
+      payment:{create:jest.fn().mockResolvedValue({id:'payment-atomic'})},
+      paymentMovement:{create:jest.fn()},
+    };
+    const transaction=jest.fn((callback:(client:typeof tx)=>unknown)=>callback(tx));
+    const service=new MiniService({$transaction:transaction} as never);
+
+    const result=await service.createMemberWithMembership({
+      member:{ci:'90010112345',firstName:'Ana',lastName:'Pérez'},
+      membership:{planId:'plan-1',initialPayment:250,paymentMethod:'CASH'},
+    },user);
+
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(tx.member.create).toHaveBeenCalled();
+    expect(tx.membership.create).toHaveBeenCalledWith({data:expect.objectContaining({memberId:member.id,planId:'plan-1'})});
+    expect(tx.payment.create).toHaveBeenCalledWith({data:expect.objectContaining({membershipId:membership.id,amount:1000,paidAmount:250,status:PaymentStatus.PARTIAL})});
+    expect(tx.paymentMovement.create).toHaveBeenCalledWith({data:expect.objectContaining({amount:250})});
+    expect(result).toMatchObject({member,membership:{id:membership.id},merged:false});
   });
 
   it('impide editar un administrador que pertenece a otro gimnasio', async () => {
@@ -231,9 +257,9 @@ describe('MiniService', () => {
   it('permite cancelar una membresía activa sin cambiar su plan', async () => {
     const current = { id:'membership-1', planId:'plan-1', periodCount:1, status:MembershipStatus.ACTIVE, startDate:new Date(), endDate:new Date(Date.now() + 86400000), member:{ status:'ACTIVE' }, payment:{ id:'payment-1', amount:1000, paidAmount:250, paidAt:null, status:PaymentStatus.PARTIAL, movements:[{ id:'movement-1' }] } };
     const updated = { ...current, status:MembershipStatus.CANCELLED };
-    const memberUpdateMany = jest.fn().mockResolvedValue({ count:1 });
+    const memberUpdate = jest.fn().mockResolvedValue({ id:'member-1', status:'INACTIVE' });
     const paymentUpdate = jest.fn().mockResolvedValue({ ...current.payment, status:PaymentStatus.PARTIAL });
-    const tx = { member:{ updateMany:memberUpdateMany }, payment:{ update:paymentUpdate }, membership: { update: jest.fn().mockResolvedValue(updated), findUniqueOrThrow: jest.fn().mockResolvedValue(updated) } };
+    const tx = { member:{ update:memberUpdate }, payment:{ update:paymentUpdate }, membership: { update: jest.fn().mockResolvedValue(updated), findFirst:jest.fn().mockResolvedValue(null), findUniqueOrThrow: jest.fn().mockResolvedValue(updated) } };
     const prisma = {
       gym: { findUnique: jest.fn().mockResolvedValue({ id:'gym-1' }) },
       membership: { findFirst: jest.fn().mockResolvedValue(current) },
@@ -246,22 +272,41 @@ describe('MiniService', () => {
       where:{ id:'payment-1' },
       data:{ amount:1000, dueDate:current.startDate, status:PaymentStatus.PARTIAL, paidAt:null },
     });
-    expect(memberUpdateMany).toHaveBeenCalledWith({
-      where:{ id:'member-1', memberships:{ none:{ status:MembershipStatus.ACTIVE, endDate:{ gte:expect.any(Date) } } } },
-      data:{ status:'INACTIVE' },
-    });
+    expect(memberUpdate).toHaveBeenCalledWith({ where:{ id:'member-1' }, data:{ status:'INACTIVE' } });
+  });
+
+  it('deriva el estado de la membresía desde sus fechas y reconcilia al miembro', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-04T18:00:00.000Z'));
+    const current = { id:'membership-1', planId:'plan-1', periodCount:1, status:MembershipStatus.SCHEDULED, startDate:new Date('2026-09-03T12:00:00.000Z'), endDate:new Date('2026-10-03T12:00:00.000Z'), member:{ status:'INACTIVE' }, payment:null };
+    const membershipUpdate = jest.fn().mockResolvedValue({ ...current, status:MembershipStatus.ACTIVE });
+    const memberUpdate = jest.fn().mockResolvedValue({ id:'member-1', status:'ACTIVE' });
+    const tx = { member:{ update:memberUpdate }, payment:{ update:jest.fn() }, membership:{ update:membershipUpdate, findFirst:jest.fn().mockResolvedValue({ id:'membership-1' }), findUniqueOrThrow:jest.fn().mockResolvedValue({ ...current, status:MembershipStatus.ACTIVE }) } };
+    const prisma = {
+      gym:{ findUnique:jest.fn().mockResolvedValue({ id:'gym-1' }) },
+      membership:{ findFirst:jest.fn().mockResolvedValueOnce(current).mockResolvedValueOnce(null) },
+      plan:{ findFirst:jest.fn().mockResolvedValue({ id:'plan-1', price:1000, durationDays:30 }) },
+      $transaction:jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new MiniService(prisma as never);
+    try {
+      await service.updateGymMembership('gym-1','member-1','membership-1',{ status:MembershipStatus.EXPIRED });
+      expect(membershipUpdate).toHaveBeenCalledWith({ where:{ id:'membership-1' }, data:expect.objectContaining({ status:MembershipStatus.ACTIVE }) });
+      expect(memberUpdate).toHaveBeenCalledWith({ where:{ id:'member-1' }, data:{ status:'ACTIVE' } });
+    } finally { jest.useRealTimers(); }
   });
 
   it('conserva intacto el cobro al archivar una membresía con abonos', async () => {
     const membershipUpdate = jest.fn().mockResolvedValue({ id:'membership-1', status:MembershipStatus.CANCELLED });
+    const memberUpdate = jest.fn().mockResolvedValue({ id:'member-1', status:'INACTIVE' });
+    const tx = { membership:{ update:membershipUpdate, findFirst:jest.fn().mockResolvedValue(null), delete:jest.fn() }, payment:{ delete:jest.fn() }, member:{ update:memberUpdate } };
     const prisma = {
       gym:{ findUnique:jest.fn().mockResolvedValue({ id:'gym-1' }) },
       membership:{
         findFirst:jest.fn().mockResolvedValue({ id:'membership-1', payment:{ id:'payment-1', paidAmount:250, movements:[{ id:'movement-1' }] } }),
-        update:membershipUpdate,
+        update:jest.fn(),
       },
       payment:{ update:jest.fn(), delete:jest.fn() },
-      $transaction:jest.fn(),
+      $transaction:jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
     };
     const service = new MiniService(prisma as never);
 
@@ -269,7 +314,7 @@ describe('MiniService', () => {
     expect(membershipUpdate).toHaveBeenCalledWith({ where:{ id:'membership-1' }, data:{ status:MembershipStatus.CANCELLED } });
     expect(prisma.payment.update).not.toHaveBeenCalled();
     expect(prisma.payment.delete).not.toHaveBeenCalled();
-    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(memberUpdate).toHaveBeenCalledWith({ where:{ id:'member-1' }, data:{ status:'INACTIVE' } });
   });
 
   it('elimina desde móvil solamente una renovación programada del gimnasio autenticado', async () => {
@@ -395,12 +440,13 @@ describe('MiniService', () => {
   });
 
   it('conserva como positivos los importes y abonos heredados de membresías canceladas', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-04T18:00:00.000Z'));
     const prisma = {
       gym: { findUnique: jest.fn().mockResolvedValue({ id: 'gym-1' }) },
       payment: { updateMany: jest.fn().mockResolvedValue({ count: 0 }), findMany: jest.fn().mockResolvedValue([
-        { amount: 1000, paidAmount: 250, status: PaymentStatus.PARTIAL },
-        { amount: 500, paidAmount: 0, status: PaymentStatus.OVERDUE },
-        { amount: 300, paidAmount: 100, status: PaymentStatus.CANCELLED },
+        { amount: 1000, paidAmount: 250, status: PaymentStatus.PARTIAL, dueDate:new Date('2026-09-04T12:00:00.000Z') },
+        { amount: 500, paidAmount: 0, status: PaymentStatus.OVERDUE, dueDate:new Date('2026-09-03T12:00:00.000Z') },
+        { amount: 300, paidAmount: 100, status: PaymentStatus.CANCELLED, dueDate:new Date('2026-09-10T12:00:00.000Z') },
       ]) },
       paymentMovement: {
         aggregate: jest.fn().mockResolvedValue({ _sum: { amount: 250 } }),
@@ -408,14 +454,20 @@ describe('MiniService', () => {
       },
     };
     const service = new MiniService(prisma as never);
-    await expect(service.getGymFinances('gym-1')).resolves.toMatchObject({
-      totalBilled: 1800,
-      totalCollected: 350,
-      pendingBalance: 1450,
-      overdueBalance: 500,
-      monthlyRevenue: 250,
-      pendingPayments: 3,
-    });
+    try {
+      await expect(service.getGymFinances('gym-1')).resolves.toMatchObject({
+        totalBilled: 1800,
+        totalCollected: 350,
+        pendingBalance: 1450,
+        dueBalance: 1250,
+        overdueBalance: 500,
+        futureBalance: 200,
+        monthlyRevenue: 250,
+        pendingPayments: 3,
+        duePayments: 2,
+        futurePayments: 1,
+      });
+    } finally { jest.useRealTimers(); }
   });
 
   it('resume las suscripciones e ingresos propios de GymFlow Mini', async () => {

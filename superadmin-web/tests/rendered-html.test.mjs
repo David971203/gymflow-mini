@@ -48,6 +48,9 @@ test("keeps the product metadata and API integration configured", async () => {
   assert.match(page, /\/platform\/overview/);
   assert.match(page, /aria-label="Buscar solicitudes de suscripción"/);
   assert.match(page, /filteredRequests/);
+  assert.match(page, /aria-label="Buscar gimnasios"/);
+  assert.match(page, /filteredGyms/);
+  assert.match(page, /No hay gimnasios que coincidan con la búsqueda/);
   assert.match(page, /\/platform\/gyms/);
   assert.match(page, /\/admins/);
   assert.match(page, /\/members/);

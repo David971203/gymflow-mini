@@ -117,6 +117,7 @@ export default function Home() {
   const [subscriptions, setSubscriptions] = useState<PlatformSubscription[]>([]);
   const [subscriptionRequests, setSubscriptionRequests] = useState<SubscriptionRequest[]>([]);
   const [requestSearch, setRequestSearch] = useState("");
+  const [gymSearch, setGymSearch] = useState("");
   const [creating, setCreating] = useState(false);
   const [managing, setManaging] = useState<Gym | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -213,6 +214,21 @@ export default function Home() {
       subscriptionPlanLabel(request.plan),
     ].filter(Boolean).join(" ")).includes(requestQuery);
   });
+  const gymQuery = normalizeSearch(gymSearch);
+  const filteredGyms = gyms.filter(gym => {
+    if (!gymQuery) return true;
+    const subscription = gym.subscriptionPlan ? subscriptionPlanLabel(gym.subscriptionPlan,gym.subscriptionTrialDays) : "Sin suscripción";
+    return normalizeSearch([
+      gym.name,
+      gym.slug,
+      gym.province,
+      gym.municipality,
+      gym.phone,
+      gym.isActive ? "Activo" : "Inactivo",
+      subscription,
+      ...gym.users.flatMap(admin => [admin.name,admin.email]),
+    ].filter(Boolean).join(" ")).includes(gymQuery);
+  });
 
   return <main className="app-shell">
     <aside className="sidebar">
@@ -246,15 +262,16 @@ export default function Home() {
 
       {isGymsPage && <article className="panel gym-table">
         <div className="panel-title"><div><h2>Gimnasios</h2><p>Selecciona un negocio para editar sus datos, administradores y miembros.</p></div><button className="link-button" onClick={() => void load()}>Actualizar</button></div>
+        <div className="request-search gym-search"><span aria-hidden="true">⌕</span><input type="search" aria-label="Buscar gimnasios" value={gymSearch} onChange={event=>setGymSearch(event.target.value)} placeholder="Buscar por gimnasio, código, ubicación, teléfono o administrador"/>{gymSearch?<button type="button" onClick={()=>setGymSearch("")} aria-label="Limpiar búsqueda de gimnasios">×</button>:null}<small>{filteredGyms.length} de {gyms.length}</small></div>
         <div className="table-head"><span>Gimnasio</span><span>Miembros</span><span>Administradores</span><span>Estado</span><span>Gestión</span></div>
-        {gyms.map(gym => <div className="table-row" key={gym.id}>
+        {filteredGyms.map(gym => <div className="table-row" key={gym.id}>
           <div className="gym-name"><span>{gym.name.slice(0,2).toUpperCase()}</span><div><strong>{gym.name}</strong><small>{gym.municipality&&gym.province?`${gym.municipality}, ${gym.province}`:gym.province ?? gym.slug} · {!gym.subscriptionPlan ? "Sin suscripción" : subscriptionExpired(gym) ? "Suscripción vencida" : subscriptionPlanLabel(gym.subscriptionPlan,gym.subscriptionTrialDays)}</small></div></div>
           <strong>{gym._count.members}</strong>
           <div className="admin-cell"><strong>{gym.users[0]?.name ?? "Sin asignar"}</strong><small>{gym.users.length > 1 ? `+${gym.users.length - 1} adicional(es)` : gym.users[0]?.email}</small></div>
           <button className={gym.isActive ? "badge" : "badge trial"} onClick={async()=>{ if(demo)return; await api(`/platform/gyms/${gym.id}/status`,token,{method:"PATCH",body:JSON.stringify({isActive:!gym.isActive})}); await load(); }}>{gym.isActive ? "Activo" : "Inactivo"}</button>
           <button className="manage-button" onClick={() => setManaging(gym)}>Gestionar</button>
         </div>)}
-        {!gyms.length && <p className="empty-copy">No hay gimnasios registrados.</p>}
+        {!gyms.length ? <p className="empty-copy">No hay gimnasios registrados.</p> : !filteredGyms.length ? <p className="empty-copy">No hay gimnasios que coincidan con la búsqueda.</p> : null}
       </article>}
     </section>
 

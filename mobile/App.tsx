@@ -218,7 +218,7 @@ function ToastHost({ active = true, priority = 0 }: { active?: boolean; priority
     const show = (nextToast: ToastMessage) => {
       if (hideTimer.current) clearTimeout(hideTimer.current);
       setToast(nextToast);
-    hideTimer.current = setTimeout(() => setToast(null), nextToast.tone === 'error' || nextToast.tone === 'rejected' ? 4500 : 3200);
+    hideTimer.current = setTimeout(() => setToast(null), nextToast.tone === 'warning' ? 5200 : nextToast.tone === 'error' || nextToast.tone === 'rejected' ? 4500 : 3200);
     };
     toastSubscribers.set(id, { priority, show });
     if (pendingToast) {
@@ -1099,7 +1099,6 @@ function MemberForm({ scope, open, member, plans, onClose, onSaved }: FormProps 
     try {
       ensureActiveSubscription();
       const photoChanged=!!photoUri||removePhoto;
-      if(photoChanged&&!await hasInternetConnection()) throw new Error('Conéctate a internet para guardar la foto del miembro');
       const input = { ci, code: code.trim() || null, firstName: firstName.trim(), lastName: lastName.trim(), age: age ? Number(age) : null, sex: sex || null, phone: phone.trim(), address: address.trim() };
       let targetId=member?.id;
       let operationId:string;
@@ -1113,14 +1112,32 @@ function MemberForm({ scope, open, member, plans, onClose, onSaved }: FormProps 
       const settlement=await settleMutation(scope,operationId);
       if(settlement.status==='REJECTED'){showRejected(settlement.message??'El servidor rechazó el cambio');return;}
       if(settlement.status==='PENDING'){
-        showPending(member?'Datos guardados en este dispositivo. Se confirmarán al recuperar conexión.':'Miembro y membresía guardados en este dispositivo. Se confirmarán al recuperar conexión.');
+        showPending(photoChanged
+          ? member
+            ? 'Datos guardados en este dispositivo. La foto no se guardó; vuelve a añadirla desde Editar datos después de sincronizar.'
+            : 'Miembro y membresía guardados en este dispositivo. La foto no se guardó; vuelve a añadirla desde Editar datos después de sincronizar.'
+          : member
+            ? 'Datos guardados en este dispositivo. Se confirmarán al recuperar conexión.'
+            : 'Miembro y membresía guardados en este dispositivo. Se confirmarán al recuperar conexión.');
         Keyboard.dismiss();onSaved();return;
       }
       if(!member)targetId=(await offline.members(scope)).find(item=>item.ci===ci)?.id??targetId;
-      if(targetId&&photoUri)await api.uploadMemberPhoto(targetId,photoUri);
-      else if(targetId&&removePhoto&&member?.photoUpdatedAt)await api.deleteMemberPhoto(targetId);
-      if(photoChanged)await syncNow(scope);
-      Keyboard.dismiss();showSuccess(member?'Datos del miembro actualizados.':'Miembro y membresía registrados.');onSaved();
+      let photoError:unknown=null;
+      if(photoChanged){
+        try {
+          if(!targetId)throw new Error('No se encontró el miembro confirmado');
+          if(!await hasInternetConnection())throw new Error('no hay conexión a internet');
+          if(photoUri)await api.uploadMemberPhoto(targetId,photoUri);
+          else if(removePhoto&&member?.photoUpdatedAt)await api.deleteMemberPhoto(targetId);
+          await syncNow(scope);
+        } catch(error) { photoError=error; }
+      }
+      Keyboard.dismiss();
+      if(photoError){
+        const reason=photoError instanceof Error?photoError.message:'error desconocido';
+        showPending(`${member?'Los datos del miembro se guardaron':'El miembro y su membresía se registraron'}, pero la foto no pudo guardarse: ${reason}. Puedes reintentarla desde Editar datos.`);
+      } else showSuccess(member?'Datos del miembro actualizados.':'Miembro y membresía registrados.');
+      onSaved();
     } catch (error) { showError(error); } finally { setSaving(false); }
   };
   const validAge = !age || (Number.isInteger(Number(age)) && Number(age) >= 1 && Number(age) <= 120);

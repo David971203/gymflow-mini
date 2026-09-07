@@ -29,6 +29,7 @@ Incluye:
 - Recuperación de contraseña mediante código de 6 dígitos enviado por Gmail y cambio seguro desde Cuenta.
 
 - Registro y edición básica de miembros con carnet de identidad cubano (CI) obligatorio.
+- Foto opcional procesada después del alta: si su subida falla, los datos confirmados se conservan y solo se reintenta la imagen.
 - Varias cuentas por gimnasio, con perfiles fijos de administrador y recepcionista.
 - Catálogo de planes con precio y duración en días.
 - Una membresía activa y una renovación programada como máximo por miembro.

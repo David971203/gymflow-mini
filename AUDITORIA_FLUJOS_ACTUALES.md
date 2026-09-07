@@ -8,10 +8,9 @@ Actualización: los puntos 1, 2, 4, 5 y 6 del orden recomendado fueron corregido
 
 La aplicación tiene una base coherente para el piloto: separación por gimnasio, permisos efectivos en el backend, vencimiento por día de La Habana, cobros con movimientos inmutables, prevención de sobrepagos y una cola offline idempotente. El backend compila y sus 115 pruebas pasan; la aplicación móvil también pasa TypeScript.
 
-Después de las correcciones aplicadas, quedan dos recorridos relevantes que todavía pueden presentar una experiencia parcial o un estado incompleto:
+Después de las correcciones aplicadas, queda un recorrido prioritario que todavía puede presentar un estado incompleto:
 
-1. miembros que solo reciben la última membresía en el snapshot;
-2. datos del miembro guardados correctamente cuando la subida posterior de su foto falla.
+1. miembros que solo reciben la última membresía en el snapshot.
 
 El panel web compila y sus 3 pruebas pasan después de alinear las expectativas con los textos y la confirmación actuales.
 
@@ -32,7 +31,7 @@ El panel web compila y sus 3 pruebas pasan después de alinear las expectativas 
 | Planes del gimnasio | Funciona, con validación desigual | Web valida enteros y dos decimales; móvil deja que el backend descubra varios errores. |
 | Alta de miembro con plan | Inconsistente | Miembro y membresía no se crean como una sola unidad lógica. |
 | Edición/archivo de miembro | Corregido | El estado ya no se edita manualmente; se deriva de las membresías. |
-| Foto del miembro | Inconsistente ante fallos | Los datos pueden guardarse y la foto fallar, pero el formulario presenta toda la acción como fallida. |
+| Foto del miembro | Corregido | La foto se trata como paso posterior y un fallo no invalida el alta o edición ya confirmada. |
 | Asignación/cancelación/renovación | Bien definida en el caso simple | Mantiene cobro e historial; falla la representación cuando existen membresías activa y programada. |
 | Cobros y abonos | Base sólida | Impide sobrepago y usa idempotencia; debe endurecerse la fecha recibida desde el dispositivo. |
 | Dashboard y finanzas | Corregido | Distingue saldo total, por cobrar hoy, vencido y futuro con la misma regla de fecha. |
@@ -68,11 +67,11 @@ Recomendación: devolver al menos la membresía activa, la programada y la últi
 
 Solución aplicada: cada mutación relevante conserva su identificador y consulta específicamente su resultado. La UI muestra éxito solo cuando esa operación fue aceptada, aviso amarillo cuando quedó pendiente offline y rechazo con el motivo cuando el servidor no la aceptó.
 
-### P1. Guardar datos y foto es una operación parcial
+### P1. Guardar datos y foto es una operación parcial — RESUELTO
 
 La creación/edición se sincroniza antes de subir o eliminar la foto. Si la subida falla, el miembro y posiblemente su membresía ya quedaron guardados, pero el formulario informa un error general y permite reintentar todo. El reintento puede terminar en un CI duplicado o en una segunda acción innecesaria.
 
-Recomendación: cerrar primero el alta válida y tratar la foto como un paso posterior reintentable, con estado propio. En edición, indicar explícitamente “datos guardados; foto pendiente”.
+Solución aplicada: la operación principal se confirma primero. Si queda pendiente offline, la aplicación cierra el formulario e informa que la foto no fue guardada. Si el servidor acepta los datos pero la subida o eliminación de la imagen falla, se conserva el alta o edición, se muestra “datos guardados; foto pendiente” y el usuario puede reintentar únicamente la foto desde Editar datos.
 
 ## Hallazgos importantes
 
@@ -168,7 +167,7 @@ El README dice que ambos endpoints de sincronización requieren `ADMIN`, pero el
 ## Orden recomendado antes de ampliar el modelo
 
 1. Corregir cierre de sesión ante 401 durante el uso.
-2. Hacer atómico el alta miembro + membresía y separar la foto.
+2. Hacer atómico el alta miembro + membresía y separar la foto. **Resuelto.**
 3. Entregar correctamente membresía activa + programada en snapshots/listas.
 4. Hacer que las confirmaciones reflejen aceptación real o estado pendiente.
 5. Eliminar la edición manual ambigua de `Member.status`. **Resuelto.**

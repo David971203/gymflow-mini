@@ -10,28 +10,29 @@
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "androidStatusBar": {
-      "backgroundColor": "#00000000",
+      "backgroundColor": "#173F31",
       "translucent": true
     },
     "icon": "./assets/icon.png",
     "android": {
       "package": "com.gymflow.mini.admin",
       "versionCode": 2,
+      "icon": "./assets/icon.png",
       "edgeToEdgeEnabled": true,
       "softwareKeyboardLayoutMode": "resize",
       "permissions": [
         "android.permission.SCHEDULE_EXACT_ALARM"
       ],
       "adaptiveIcon": {
-        "foregroundImage": "./assets/icon.png",
-        "backgroundColor": "#D8FF3F"
+        "foregroundImage": "./assets/adaptive-foreground.png",
+        "backgroundColor": "#ffffff"
       }
     },
     "ios": {
       "bundleIdentifier": "com.gymflow.mini.admin",
       "buildNumber": "2",
       "supportsTablet": false,
-      "icon": "./assets/ios-icon.png",
+      "icon": "./assets/icon-ios.png",
       "config": {
         "usesNonExemptEncryption": false
       }
@@ -40,6 +41,19 @@
       "expo-secure-store",
       "expo-sqlite",
       "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#173F31",
+          "image": "./assets/icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "dark": {
+            "backgroundColor": "#173F31",
+            "image": "./assets/icon.png"
+          }
+        }
+      ],
       [
         "expo-image-picker",
         {

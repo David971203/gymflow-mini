@@ -1,0 +1,4 @@
+import { Type } from 'class-transformer';
+import { IsBoolean, IsInt, IsNumber, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
+export class CreatePlanDto { @IsOptional() @IsUUID() clientId?: string; @IsString() @MaxLength(80) name: string; @IsOptional() @IsString() @MaxLength(300) description?: string; @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) price: number; @Type(() => Number) @IsInt() @Min(1) durationDays: number; }
+export class UpdatePlanDto { @IsOptional() @IsString() @MaxLength(80) name?: string; @IsOptional() @IsString() @MaxLength(300) description?: string; @IsOptional() @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) price?: number; @IsOptional() @Type(() => Number) @IsInt() @Min(1) durationDays?: number; @IsOptional() @IsBoolean() isActive?: boolean; }

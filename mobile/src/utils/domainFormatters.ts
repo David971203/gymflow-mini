@@ -1,7 +1,7 @@
 import { isMembershipDayOnOrBefore, membershipRemainingDays } from '../membershipDates';
 import type { Currency, MemberSex, Payment, Plan } from '../types';
 
-export type PaymentMonthFilter = 'ALL' | number;
+export type PaymentMonthFilter = 'ALL' | readonly number[];
 export type PaymentYearFilter = 'ALL' | number;
 
 export const MONTH_NAMES = [
@@ -43,8 +43,12 @@ export function paymentIsDue(payment: Payment, now = Date.now()) {
 export function paymentPeriodLabel(month: PaymentMonthFilter, year: PaymentYearFilter) {
   if (month === 'ALL' && year === 'ALL') return 'Todos los períodos';
   if (month === 'ALL') return `Año ${year}`;
-  if (year === 'ALL') return MONTH_NAMES[month];
-  return `${MONTH_NAMES[month]} ${year}`;
+  const selected = [...new Set(month)].filter(value => Number.isInteger(value) && value >= 0 && value < MONTH_NAMES.length).sort((left, right) => left - right);
+  if (!selected.length || selected.length === MONTH_NAMES.length) return year === 'ALL' ? 'Todos los períodos' : `Año ${year}`;
+  const names = selected.map(value => MONTH_NAMES[value]);
+  const months = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} y ${names.at(-1)}`;
+  if (year === 'ALL') return months;
+  return names.length === 1 ? `${months} ${year}` : `${months} de ${year}`;
 }
 
 export function membershipStatusLabel(status: string) {

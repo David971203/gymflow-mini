@@ -11,3 +11,6 @@
 **/*.db-shm
 **/*.db-wal
 .sites/
+outputs/
+mobile/android/
+mobile/ios/
